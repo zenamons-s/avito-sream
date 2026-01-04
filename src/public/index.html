@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Avito stream</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 16px; }
+    #status { padding: 8px 10px; background: #f4f4f4; border-radius: 8px; margin-bottom: 12px; }
+    #log { display: flex; flex-direction: column; gap: 8px; }
+    .msg { border: 1px solid #eee; border-radius: 10px; padding: 10px; }
+    .meta { font-size: 12px; opacity: .75; margin-bottom: 6px; }
+    .text { white-space: pre-wrap; }
+    .pill { display:inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; background:#eee; margin-left: 8px;}
+  </style>
+</head>
+<body>
+  <h2>Avito stream <span id="conn" class="pill">disconnected</span></h2>
+  <div id="status">connecting…</div>
+
+  <div style="margin: 10px 0; display:flex; gap: 8px; flex-wrap: wrap;">
+    <button id="bindBtn">Bind current chat</button>
+    <button id="clearBtn">Clear bind</button>
+    <span id="bindState" class="pill">bind: unknown</span>
+  </div>
+  <div id="log"></div>
+
+<script>
+  const statusEl = document.getElementById('status');
+  const logEl = document.getElementById('log');
+  const connEl = document.getElementById('conn');
+  const bindBtn = document.getElementById('bindBtn');
+  const clearBtn = document.getElementById('clearBtn');
+  const bindStateEl = document.getElementById('bindState');
+
+  async function refreshBindStatus() {
+    try {
+      const r = await fetch('/bind/status');
+      const j = await r.json();
+      if (j?.bound) {
+        bindStateEl.textContent = 'bind: ✅';
+        bindStateEl.title = j.url || '';
+      } else {
+        bindStateEl.textContent = 'bind: ✖';
+        bindStateEl.title = '';
+      }
+    } catch {
+      bindStateEl.textContent = 'bind: error';
+    }
+  }
+
+  bindBtn.onclick = async () => {
+    try {
+      const r = await fetch('/bind/current', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+      const j = await r.json().catch(() => ({}));
+      if (j?.ok) addBlock(new Date().toISOString() + ' | bind', 'Bound current chat ✅');
+      else addBlock(new Date().toISOString() + ' | bind', 'Bind failed: ' + (j?.error || 'unknown'));
+    } catch (e) {
+      addBlock(new Date().toISOString() + ' | bind', 'Bind request error');
+    }
+    refreshBindStatus();
+  };
+
+  clearBtn.onclick = async () => {
+    try {
+      await fetch('/bind/clear', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+      addBlock(new Date().toISOString() + ' | bind', 'Bind cleared');
+    } catch {
+      addBlock(new Date().toISOString() + ' | bind', 'Clear bind failed');
+    }
+    refreshBindStatus();
+  };
+
+  function wsUrl() {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    return `${proto}://${location.host}/ws`;
+  }
+
+  function addBlock(meta, text) {
+    const div = document.createElement('div');
+    div.className = 'msg';
+    div.innerHTML = `<div class="meta"></div><div class="text"></div>`;
+    div.querySelector('.meta').textContent = meta;
+    div.querySelector('.text').textContent = text;
+    logEl.prepend(div);
+  }
+
+  let ws = null;
+  let retry = 0;
+
+  function connect() {
+    const url = wsUrl();
+    statusEl.textContent = `connecting to ${url} …`;
+    connEl.textContent = 'connecting';
+
+    ws = new WebSocket(url);
+
+    ws.onopen = () => {
+      retry = 0;
+      connEl.textContent = 'connected';
+      statusEl.textContent = 'connected';
+      addBlock(new Date().toISOString() + ' | from: frontend', 'WS connected ✅');
+    };
+
+    ws.onclose = () => {
+      connEl.textContent = 'disconnected';
+      const delay = Math.min(15000, 500 * Math.pow(1.6, retry++));
+      statusEl.textContent = `disconnected — reconnect in ${Math.round(delay)} ms`;
+      setTimeout(connect, delay);
+    };
+
+    ws.onerror = () => {
+      // ошибка обычно ведёт к onclose, но пусть будет статус
+      statusEl.textContent = 'ws error';
+    };
+
+    ws.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data);
+        if (data.type === 'status') {
+          statusEl.textContent = `[${data.level}] ${data.message}`;
+          return;
+        }
+        if (data.type === 'message') {
+          addBlock(`${data.at} | from: ${data.from}`, data.text);
+        }
+      } catch {}
+    };
+  }
+
+  connect();
+  refreshBindStatus();
+</script>
+</body>
+</html>

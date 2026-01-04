@@ -31,10 +31,9 @@ export class BindController {
    */
   @Post('current')
   async bindCurrent(@Body() _body: any) {
-    let url = (this.watcher.getCurrentUrl() ?? '').trim();
-    if (!url) {
-      url = (await this.watcher.getMessengerTabUrl()) ?? '';
-    }
+    const activeUrl = (this.watcher.getActiveUrl() ?? '').trim();
+    const picked = await this.watcher.pickBestBindUrl(activeUrl);
+    const url = (picked ?? '').trim();
     if (!url) {
       return { ok: false, error: 'No active Puppeteer page URL (is browser running?)' };
     }

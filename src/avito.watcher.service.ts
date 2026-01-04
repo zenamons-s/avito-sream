@@ -322,6 +322,7 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
       await sleep(650);
     }
 
+    await this.dumpDebugArtifacts('chat-not-found');
     throw new Error(`Chat not found after scan+scroll: ${target}`);
   }
 
@@ -335,6 +336,37 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
       }
     } catch {}
     return null;
+  }
+
+  getActiveUrl(): string | null {
+    try {
+      return this.page?.url?.() ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async pickBestBindUrl(currentUrl: string | null): Promise<string | null> {
+    try {
+      if (this.browser) {
+        const pages = await this.browser.pages();
+        const channel = pages.find((p) => /\/messenger\/channel\//i.test(p.url()));
+        if (channel) {
+          this.page = channel;
+          this.lastMessengerUrl = channel.url();
+          return channel.url();
+        }
+
+        const messenger = pages.find((p) => /\/messenger/i.test(p.url()));
+        if (messenger) {
+          this.page = messenger;
+          this.lastMessengerUrl = messenger.url();
+          return messenger.url();
+        }
+      }
+    } catch {}
+
+    return currentUrl;
   }
 
   /** Finds any open Puppeteer tab that looks like Avito messenger. */
@@ -620,7 +652,13 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
         document.body;
 
       const getText = (el: HTMLElement) =>
-        norm(el.innerText || el.getAttribute('aria-label') || el.getAttribute('title') || el.textContent || '');
+        norm(
+          el.getAttribute('aria-label') ||
+            el.getAttribute('title') ||
+            el.textContent ||
+            el.innerText ||
+            '',
+        );
 
       const nodes = Array.from(
         sidebar.querySelectorAll<HTMLElement>('a, button, [role="button"], [role="link"], div, span'),

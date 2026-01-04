@@ -30,8 +30,11 @@ export class BindController {
    * Use flow: run with HEADLESS=false, login, open the desired chat manually, then POST /bind/current.
    */
   @Post('current')
-  bindCurrent(@Body() _body: any) {
-    const url = (this.watcher.getCurrentUrl() ?? '').trim();
+  async bindCurrent(@Body() _body: any) {
+    let url = (this.watcher.getCurrentUrl() ?? '').trim();
+    if (!url) {
+      url = (await this.watcher.getMessengerTabUrl()) ?? '';
+    }
     if (!url) {
       return { ok: false, error: 'No active Puppeteer page URL (is browser running?)' };
     }

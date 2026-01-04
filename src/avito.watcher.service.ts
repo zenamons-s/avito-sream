@@ -18,6 +18,7 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
 
   private lastFingerprint = '';
   private bridgeInstalled = false;
+  private lastMessengerUrl: string | null = null;
 
   // Persistently bound chat URL (optional, created via /bind/current)
   private readonly bindFilePath = path.join(process.cwd(), '.avito-target.json');
@@ -178,6 +179,7 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
         message: `Messenger opened: ${page.url()}`,
         at: new Date().toISOString(),
       });
+      this.lastMessengerUrl = page.url();
       return;
     }
 
@@ -214,6 +216,7 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
       await page.goto(url, { waitUntil: 'domcontentloaded' });
       await sleep(1200);
       await this.waitForChatLikelyOpened();
+      this.lastMessengerUrl = page.url();
       return;
     }
 
@@ -229,6 +232,7 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
       await page.goto(bound, { waitUntil: 'domcontentloaded' });
       await sleep(1200);
       await this.waitForChatLikelyOpened();
+      this.lastMessengerUrl = page.url();
       return;
     }
 
@@ -251,6 +255,7 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
       if (clicked) {
         await this.waitForChatLikelyOpened();
         this.bus.emit({ type: 'status', level: 'info', message: `Chat opened via search: ${target}`, at: new Date().toISOString() });
+        this.lastMessengerUrl = page.url();
         return;
       }
 
@@ -266,6 +271,7 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
       await page.goto(chanUrl, { waitUntil: 'domcontentloaded' });
       await sleep(1200);
       await this.waitForChatLikelyOpened();
+      this.lastMessengerUrl = page.url();
       return;
     }
 
@@ -278,6 +284,7 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
       if (clicked) {
         await this.waitForChatLikelyOpened();
         this.bus.emit({ type: 'status', level: 'info', message: `Chat opened via scan+scroll: ${target}`, at: new Date().toISOString() });
+        this.lastMessengerUrl = page.url();
         return;
       }
 
@@ -313,10 +320,31 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
   /** Returns current Puppeteer page URL (for /bind/current). */
   getCurrentUrl(): string | null {
     try {
-      return this.page?.url?.() ?? null;
-    } catch {
-      return null;
-    }
+      const url = this.page?.url?.() ?? null;
+      if (url && /avito\.ru\/(profile\/)?messenger\//i.test(url)) return url;
+      if (this.lastMessengerUrl && /avito\.ru\/(profile\/)?messenger\//i.test(this.lastMessengerUrl)) {
+        return this.lastMessengerUrl;
+      }
+    } catch {}
+    return null;
+  }
+
+  /** Finds any open Puppeteer tab that looks like Avito messenger. */
+  async getMessengerTabUrl(): Promise<string | null> {
+    try {
+      if (!this.browser) return null;
+      const pages = await this.browser.pages();
+      for (const p of pages) {
+        const url = p.url();
+        if (/avito\.ru\/(profile\/)?messenger\//i.test(url)) {
+          this.page = p;
+          this.lastMessengerUrl = url;
+          return url;
+        }
+      }
+    } catch {}
+
+    return null;
   }
 
   private readBoundChatUrl(): string | null {
@@ -368,7 +396,13 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
       const target = norm(name);
 
       const getText = (el: HTMLElement) =>
-        norm(el.innerText || el.getAttribute('aria-label') || el.getAttribute('title') || el.textContent || '');
+        norm(
+          el.getAttribute('aria-label') ||
+            el.getAttribute('title') ||
+            el.textContent ||
+            el.innerText ||
+            '',
+        );
 
       const isClickable = (x: HTMLElement) =>
         x.tagName === 'A' ||
@@ -409,6 +443,11 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
         cur = cur.parentElement as HTMLElement | null;
       }
       if (!el) return false;
+
+      if (!isClickable(el) && el.closest) {
+        const clickable = el.closest('a, button, [role="button"], [role="option"], [role="link"]') as HTMLElement | null;
+        if (clickable) el = clickable;
+      }
 
       el.scrollIntoView({ block: 'center' });
       el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));

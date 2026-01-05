@@ -60,12 +60,31 @@
         tunnelEl.textContent = `Public URL: ${j.url}`;
         tunnelEl.title = j.url;
       } else {
-        tunnelEl.textContent = 'Public URL: —';
-        tunnelEl.title = '';
+        const configUrl = await fetchPublicUrlFromConfig();
+        if (configUrl) {
+          tunnelEl.textContent = `Public URL: ${configUrl}`;
+          tunnelEl.title = configUrl;
+        } else {
+          tunnelEl.textContent = 'Public URL: —';
+          tunnelEl.title = '';
+        }
       }
     } catch {
       tunnelEl.textContent = 'Public URL: error';
     }
+  }
+
+  async function fetchPublicUrlFromConfig() {
+    try {
+      const r = await fetch('/config');
+      const j = await r.json();
+      if (j?.publicUrl) {
+        return j.publicUrl;
+      }
+    } catch {
+      return null;
+    }
+    return null;
   }
 
   bindBtn.onclick = async () => {

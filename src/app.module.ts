@@ -11,6 +11,7 @@ import { EventBus } from './event-bus';
 import { AvitoWatcherService } from './avito.watcher.service';
 import { TunnelService } from './tunnel.service';
 import { CloudpubService } from './cloudpub.service';
+import { ConfigController } from './config.controller';
 
 @Module({
   imports: [
@@ -19,7 +20,12 @@ import { CloudpubService } from './cloudpub.service';
       serveRoot: '/',
     }),
   ],
-  controllers: [HealthController, BindController, TunnelController],
+  controllers: [
+    HealthController,
+    BindController,
+    TunnelController,
+    ConfigController,
+  ],
   providers: [
     AppService,
     WsGateway,

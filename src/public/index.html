@@ -17,6 +17,7 @@
 <body>
   <h2>Avito stream <span id="conn" class="pill">disconnected</span></h2>
   <div id="status">connecting…</div>
+  <div id="tunnel" class="pill" style="margin-top:8px;">Public URL: —</div>
 
   <div style="margin: 10px 0; display:flex; gap: 8px; flex-wrap: wrap;">
     <button id="bindBtn">Bind current chat</button>
@@ -32,6 +33,7 @@
   const bindBtn = document.getElementById('bindBtn');
   const clearBtn = document.getElementById('clearBtn');
   const bindStateEl = document.getElementById('bindState');
+  const tunnelEl = document.getElementById('tunnel');
 
   async function refreshBindStatus() {
     try {
@@ -47,6 +49,22 @@
       }
     } catch {
       bindStateEl.textContent = 'bind: error';
+    }
+  }
+
+  async function refreshTunnel() {
+    try {
+      const r = await fetch('/tunnel');
+      const j = await r.json();
+      if (j?.ok && j?.url) {
+        tunnelEl.textContent = `Public URL: ${j.url}`;
+        tunnelEl.title = j.url;
+      } else {
+        tunnelEl.textContent = 'Public URL: —';
+        tunnelEl.title = '';
+      }
+    } catch {
+      tunnelEl.textContent = 'Public URL: error';
     }
   }
 
@@ -141,6 +159,8 @@
 
   connect();
   refreshBindStatus();
+  refreshTunnel();
+  setInterval(refreshTunnel, 5000);
 </script>
 </body>
 </html>

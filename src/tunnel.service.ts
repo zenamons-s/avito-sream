@@ -1,5 +1,6 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
+import { promises as fs } from 'fs';
 import * as readline from 'readline';
 import { EventBus } from './event-bus';
 
@@ -11,8 +12,23 @@ export class TunnelService implements OnModuleInit, OnModuleDestroy {
   private healthTimer: NodeJS.Timeout | null = null;
   private shuttingDown = false;
   private lastHealthSummary: string | null = null;
+  private tunnelUrl: string | null = null;
+  private readonly urlRegex: RegExp;
+  private readonly urlFilePath: string | null;
+  private readonly allowedHosts: Set<string> | null;
 
-  constructor(private readonly bus: EventBus) {}
+  constructor(private readonly bus: EventBus) {
+    const regexRaw = String(process.env.TUNNEL_URL_REGEX ?? '').trim();
+    this.urlRegex = regexRaw
+      ? new RegExp(regexRaw)
+      : /https?:\/\/[^\s]+/;
+    const urlFile = String(process.env.TUNNEL_URL_FILE ?? '').trim();
+    this.urlFilePath = urlFile || null;
+    const hostsRaw = String(process.env.TUNNEL_URL_HOSTS ?? '').trim();
+    this.allowedHosts = hostsRaw
+      ? new Set(hostsRaw.split(',').map((host) => host.trim()).filter(Boolean))
+      : null;
+  }
 
   onModuleInit() {
     this.startTunnel();
@@ -33,8 +49,27 @@ export class TunnelService implements OnModuleInit, OnModuleDestroy {
   }
 
   private startTunnel() {
+    const enabled = String(process.env.TUNNEL_ENABLED ?? 'false') === 'true';
+    if (!enabled) {
+      this.bus.emit({
+        type: 'status',
+        level: 'info',
+        message: 'Tunnel disabled (TUNNEL_ENABLED=false).',
+        at: new Date().toISOString(),
+      });
+      return;
+    }
+
     const command = String(process.env.TUNNEL_COMMAND ?? '').trim();
-    if (!command) return;
+    if (!command) {
+      this.bus.emit({
+        type: 'status',
+        level: 'warn',
+        message: 'Tunnel command not set (TUNNEL_COMMAND).',
+        at: new Date().toISOString(),
+      });
+      return;
+    }
 
     this.bus.emit({
       type: 'status',
@@ -95,6 +130,22 @@ export class TunnelService implements OnModuleInit, OnModuleDestroy {
       message: `Tunnel ${stream}: ${message}`,
       at: new Date().toISOString(),
     });
+
+    const match = message.match(this.urlRegex);
+    if (match?.[0]) {
+      const url = match[0];
+      if (!this.isAllowedHost(url)) return;
+      if (url !== this.tunnelUrl) {
+        this.tunnelUrl = url;
+        void this.persistUrl(url);
+        this.bus.emit({
+          type: 'status',
+          level: 'info',
+          message: `Tunnel URL detected: ${url}`,
+          at: new Date().toISOString(),
+        });
+      }
+    }
   }
 
   private startHealthCheck() {
@@ -142,5 +193,34 @@ export class TunnelService implements OnModuleInit, OnModuleDestroy {
       message: `Tunnel health ${summary}`,
       at: new Date().toISOString(),
     });
+  }
+
+  getTunnelUrl() {
+    return this.tunnelUrl;
+  }
+
+  private isAllowedHost(url: string) {
+    if (!this.allowedHosts || this.allowedHosts.size === 0) return true;
+    try {
+      const host = new URL(url).host;
+      return this.allowedHosts.has(host);
+    } catch {
+      return false;
+    }
+  }
+
+  private async persistUrl(url: string) {
+    if (!this.urlFilePath) return;
+    try {
+      await fs.writeFile(this.urlFilePath, `${url}\n`, 'utf8');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.bus.emit({
+        type: 'status',
+        level: 'warn',
+        message: `Tunnel URL write failed: ${message}`,
+        at: new Date().toISOString(),
+      });
+    }
   }
 }

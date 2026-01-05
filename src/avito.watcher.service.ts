@@ -93,6 +93,7 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
     });
 
     this.page = await this.browser.newPage();
+    await this.maybeLoadCookies(this.page);
     this.page.setDefaultNavigationTimeout(navTimeout);
 
     await this.page.setViewport({ width: 1280, height: 800 });
@@ -152,10 +153,11 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
           this.bus.emit({
             type: 'status',
             level: 'error',
-            message: 'AUTH_REQUIRED (headless). Run once with HEADLESS=false to login.',
+            message:
+              'AUTH_REQUIRED (headless). Provide cookies via AVITO_COOKIES_* or run once with HEADLESS=false to login.',
             at: new Date().toISOString(),
           });
-          throw new Error('Not logged in in headless. Run once with HEADLESS=false to refresh session.');
+          throw new Error('Not logged in in headless. Provide cookies or run once with HEADLESS=false to refresh session.');
         }
 
         this.bus.emit({
@@ -180,6 +182,7 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
         at: new Date().toISOString(),
       });
       this.lastMessengerUrl = page.url();
+      this.maybePersistBoundChatUrl(this.lastMessengerUrl, 'messenger-open');
       return;
     }
 
@@ -217,6 +220,7 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
       await sleep(1200);
       await this.waitForChatLikelyOpened();
       this.lastMessengerUrl = page.url();
+      this.maybePersistBoundChatUrl(this.lastMessengerUrl, 'target-chat-url');
       return;
     }
 
@@ -233,6 +237,7 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
       await sleep(1200);
       await this.waitForChatLikelyOpened();
       this.lastMessengerUrl = page.url();
+      this.maybePersistBoundChatUrl(this.lastMessengerUrl, 'bound-chat-url');
       return;
     }
 
@@ -256,6 +261,7 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
         await this.waitForChatLikelyOpened();
         this.bus.emit({ type: 'status', level: 'info', message: `Chat opened via search: ${target}`, at: new Date().toISOString() });
         this.lastMessengerUrl = page.url();
+        this.maybePersistBoundChatUrl(this.lastMessengerUrl, 'search');
         return;
       }
 
@@ -272,6 +278,7 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
       await sleep(1200);
       await this.waitForChatLikelyOpened();
       this.lastMessengerUrl = page.url();
+      this.maybePersistBoundChatUrl(this.lastMessengerUrl, 'network-sniff');
       return;
     }
 
@@ -285,6 +292,7 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
         await this.waitForChatLikelyOpened();
         this.bus.emit({ type: 'status', level: 'info', message: `Chat opened via scan+scroll: ${target}`, at: new Date().toISOString() });
         this.lastMessengerUrl = page.url();
+        this.maybePersistBoundChatUrl(this.lastMessengerUrl, 'scan-scroll');
         return;
       }
 
@@ -314,6 +322,7 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
       await sleep(650);
     }
 
+    await this.dumpDebugArtifacts('chat-not-found');
     throw new Error(`Chat not found after scan+scroll: ${target}`);
   }
 
@@ -345,6 +354,115 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
     } catch {}
 
     return null;
+  getActiveUrl(): string | null {
+    try {
+      return this.page?.url?.() ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async pickBestBindUrl(currentUrl: string | null): Promise<string | null> {
+    try {
+      if (this.browser) {
+        const pages = await this.browser.pages();
+        const channel = pages.find((p) => /\/messenger\/channel\//i.test(p.url()));
+        if (channel) {
+          this.page = channel;
+          this.lastMessengerUrl = channel.url();
+          return channel.url();
+        }
+
+        const messenger = pages.find((p) => /\/messenger/i.test(p.url()));
+        if (messenger) {
+          this.page = messenger;
+          this.lastMessengerUrl = messenger.url();
+          return messenger.url();
+        }
+      }
+    } catch {}
+
+    return currentUrl;
+  }
+
+  /** Finds any open Puppeteer tab that looks like Avito messenger. */
+  async getMessengerTabUrl(): Promise<string | null> {
+    try {
+      if (!this.browser) return null;
+      const pages = await this.browser.pages();
+      for (const p of pages) {
+        const url = p.url();
+        if (/avito\.ru\/(profile\/)?messenger\//i.test(url)) {
+          this.page = p;
+          this.lastMessengerUrl = url;
+          return url;
+        }
+      }
+    } catch {}
+
+    return null;
+  }
+
+  private async maybeLoadCookies(page: Page) {
+    const jsonRaw = process.env.AVITO_COOKIES_JSON ?? '';
+    const b64Raw = process.env.AVITO_COOKIES_B64 ?? '';
+    const pathRaw = process.env.AVITO_COOKIES_PATH ?? '';
+
+    let payload = jsonRaw.trim();
+    if (!payload && b64Raw.trim()) {
+      try {
+        payload = Buffer.from(b64Raw.trim(), 'base64').toString('utf-8');
+      } catch {
+        payload = '';
+      }
+    }
+
+    if (!payload && pathRaw.trim()) {
+      try {
+        payload = fs.readFileSync(pathRaw.trim(), 'utf-8');
+      } catch {
+        payload = '';
+      }
+    }
+
+    if (!payload) return;
+
+    try {
+      const cookies = JSON.parse(payload);
+      if (!Array.isArray(cookies) || cookies.length === 0) return;
+      await page.setCookie(...cookies);
+      this.bus.emit({
+        type: 'status',
+        level: 'info',
+        message: `Loaded ${cookies.length} auth cookies`,
+        at: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      this.bus.emit({
+        type: 'status',
+        level: 'warn',
+        message: `Failed to load cookies: ${e?.message ?? String(e)}`,
+        at: new Date().toISOString(),
+      });
+    }
+  }
+
+  private maybePersistBoundChatUrl(url: string | null, reason: string) {
+    if (!url) return;
+    const autoBind = String(process.env.AUTO_BIND_ON_OPEN ?? 'false') === 'true';
+    if (!autoBind) return;
+    if (!/avito\.ru\/(profile\/)?messenger\//i.test(url)) return;
+
+    try {
+      const state = { url, boundAt: new Date().toISOString(), reason };
+      fs.writeFileSync(this.bindFilePath, JSON.stringify(state, null, 2), 'utf-8');
+      this.bus.emit({
+        type: 'status',
+        level: 'info',
+        message: `Auto-bound chat: ${url}`,
+        at: new Date().toISOString(),
+      });
+    } catch {}
   }
 
   private readBoundChatUrl(): string | null {
@@ -550,7 +668,13 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
         document.body;
 
       const getText = (el: HTMLElement) =>
-        norm(el.innerText || el.getAttribute('aria-label') || el.getAttribute('title') || el.textContent || '');
+        norm(
+          el.getAttribute('aria-label') ||
+            el.getAttribute('title') ||
+            el.textContent ||
+            el.innerText ||
+            '',
+        );
 
       const nodes = Array.from(
         sidebar.querySelectorAll<HTMLElement>('a, button, [role="button"], [role="link"], div, span'),

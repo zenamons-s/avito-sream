@@ -20,6 +20,17 @@ npm run start:dev
 Первый запуск делай с `HEADLESS=false` — откроется окно Chromium. Войди в Avito (смс/2FA).
 Сессия сохраняется в `.avito-profile` и в следующих запусках обычно авторизация уже не нужна.
 
+#### Автоматизация авторизации (headless)
+Если нужно без UI, можно передать cookies через переменные окружения:
+```
+AVITO_COOKIES_PATH=/path/to/cookies.json
+# или
+AVITO_COOKIES_JSON='[{"name":"sid","value":"...","domain":".avito.ru","path":"/"}]'
+# или base64
+AVITO_COOKIES_B64=eyJuYW1lIjoic2lkIiwidmFsdWUiOiIuLi4ifQ==
+```
+Cookies можно экспортировать из браузера любым cookie-exporter расширением. После загрузки cookies watcher попытается открыть мессенджер без ручного логина.
+
 Если Avito плохо работает в headless — для демо лучше запускать так (без видимого окна, но НЕ headless):
 ```bash
 sudo apt update
@@ -35,6 +46,7 @@ cloudpub http 3000
 ```
 
 Открой внешний URL от cloudpub — там будет тот же фронт и подключение к WS.
+Если cloudpub не установлен, установи по инструкции: https://cloudpub.ru/ (CLI).
 
 ## Отладка
 Если watcher падает, он сохраняет:
@@ -43,6 +55,13 @@ cloudpub http 3000
 - иногда `debug/*.json` — сниффер сетевых ответов
 
 Это помогает быстро подогнать селекторы/поиск под текущую верстку Avito.
+
+## Надёжная фиксация чата
+Чтобы стабильно открывать нужный диалог в виртуализированном списке:
+1. Запусти сервис с `HEADLESS=false`.
+2. В окне Puppeteer вручную открой чат.
+3. В интерфейсе нажми **Bind current chat** или отправь `POST /bind/current`.
+4. Для автофиксации можно включить `AUTO_BIND_ON_OPEN=true`, тогда URL чата сохранится автоматически при успешном открытии.
 
 ## Переменные окружения
 Смотри `.env.example`.

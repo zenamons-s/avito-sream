@@ -37,15 +37,18 @@ export class BindController {
     }
     const activeUrl = (this.watcher.getActiveUrl() ?? '').trim();
     const picked = await this.watcher.pickBestBindUrl(activeUrl);
-    const url = (picked ?? '').trim();
-    if (!url) {
+    const finalUrl = (picked ?? url ?? '').trim();
+    if (!finalUrl) {
       return { ok: false, error: 'No active Puppeteer page URL (is browser running?)' };
     }
-    if (!/avito\.ru\/(profile\/)?messenger\//i.test(url)) {
-      return { ok: false, error: `Current URL does not look like Avito messenger: ${url}` };
+    if (!/avito\.ru\/(profile\/)?messenger\//i.test(finalUrl)) {
+      return {
+        ok: false,
+        error: `Current URL does not look like Avito messenger: ${finalUrl}`,
+      };
     }
 
-    const state: BindState = { url, boundAt: new Date().toISOString() };
+    const state: BindState = { url: finalUrl, boundAt: new Date().toISOString() };
     fs.writeFileSync(this.bindFilePath, JSON.stringify(state, null, 2), 'utf-8');
 
     this.bus.emit({

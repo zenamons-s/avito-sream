@@ -9,6 +9,7 @@ import { WsGateway } from './ws.gateway';
 import { EventBus } from './event-bus';
 import { AvitoWatcherService } from './avito.watcher.service';
 import { TunnelService } from './tunnel.service';
+import { CloudpubService } from './cloudpub.service';
 
 @Module({
   imports: [
@@ -18,6 +19,13 @@ import { TunnelService } from './tunnel.service';
     }),
   ],
   controllers: [HealthController, BindController],
-  providers: [AppService, WsGateway, EventBus, AvitoWatcherService, TunnelService],
+  providers: [
+    AppService,
+    WsGateway,
+    EventBus,
+    AvitoWatcherService,
+    TunnelService,
+    CloudpubService,
+  ],
 })
 export class AppModule {}

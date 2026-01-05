@@ -48,6 +48,15 @@ cloudpub http 3000
 Открой внешний URL от cloudpub — там будет тот же фронт и подключение к WS.
 Если cloudpub не установлен, установи по инструкции: https://cloudpub.ru/ (CLI).
 
+### Автозапуск туннеля и health-check
+Можно запускать туннель вместе с сервисом и смотреть его статус в WS:
+```
+TUNNEL_COMMAND="cloudpub http 3000"
+TUNNEL_HEALTH_URL=https://<ваш-URL>/
+TUNNEL_HEALTH_INTERVAL_MS=30000
+TUNNEL_HEALTH_TIMEOUT_MS=5000
+```
+
 ## Отладка
 Если watcher падает, он сохраняет:
 - `debug/*.png` — скриншот страницы

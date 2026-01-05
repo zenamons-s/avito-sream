@@ -31,10 +31,26 @@ export class BindController {
    */
   @Post('current')
   async bindCurrent(@Body() _body: any) {
-    let url = (this.watcher.getCurrentUrl() ?? '').trim();
-    if (!url) {
-      url = (await this.watcher.getMessengerTabUrl()) ?? '';
+    const finalUrl = ((await this.watcher.getBestBindableUrl()) ?? '').trim();
+    if (!finalUrl) {
+      const message = 'No active Puppeteer page URL (is browser running?)';
+      this.bus.emit({
+        type: 'status',
+        level: 'warn',
+        message,
+        at: new Date().toISOString(),
+      });
+      return { ok: false, message };
     }
+    if (!this.watcher.isMessengerUrl(finalUrl)) {
+      const message = `Current URL does not look like Avito messenger: ${finalUrl}`;
+      this.bus.emit({
+        type: 'status',
+        level: 'warn',
+        message,
+        at: new Date().toISOString(),
+      });
+      return { ok: false, message };
     const activeUrl = (this.watcher.getActiveUrl() ?? '').trim();
     const picked = await this.watcher.pickBestBindUrl(activeUrl);
     const finalUrl = (picked ?? url ?? '').trim();
@@ -54,11 +70,11 @@ export class BindController {
     this.bus.emit({
       type: 'status',
       level: 'info',
-      message: `Target chat bound: ${url}`,
+      message: `Target chat bound: ${finalUrl}`,
       at: new Date().toISOString(),
     });
 
-    return { ok: true, ...state };
+    return { ok: true, message: `Bound current chat: ${finalUrl}`, ...state };
   }
 
   @Post('clear')

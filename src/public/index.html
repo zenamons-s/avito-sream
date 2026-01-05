@@ -53,8 +53,11 @@
     try {
       const r = await fetch('/bind/current', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
       const j = await r.json().catch(() => ({}));
-      if (j?.ok) addBlock(new Date().toISOString() + ' | bind', 'Bound current chat ✅');
-      else addBlock(new Date().toISOString() + ' | bind', 'Bind failed: ' + (j?.error || 'unknown'));
+      if (j?.ok) {
+        addBlock(new Date().toISOString() + ' | bind', `${j?.message || 'Bound current chat ✅'}${j?.url ? `\n${j.url}` : ''}`);
+      } else {
+        addBlock(new Date().toISOString() + ' | bind', `Bind failed: ${j?.message || 'unknown'}`);
+      }
     } catch (e) {
       addBlock(new Date().toISOString() + ' | bind', 'Bind request error');
     }

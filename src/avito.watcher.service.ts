@@ -103,6 +103,16 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
     });
 
     this.page = await this.browser.newPage();
+    this.installPopupHandlers(this.page);
+    this.browser.on('targetcreated', async (target) => {
+      if (target.type() !== 'page') return;
+      try {
+        const createdPage = await target.page();
+        if (!createdPage) return;
+        this.installPopupHandlers(createdPage);
+        await this.maybeAdoptMessengerPage(createdPage, 'targetcreated');
+      } catch {}
+    });
     await this.maybeLoadCookies(this.page);
     this.page.setDefaultNavigationTimeout(navTimeout);
 
@@ -204,9 +214,10 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
    *
    * Стратегии по приоритету:
    * 0) Если задан TARGET_CHAT_URL — открываем сразу.
-   * 1) Поиск по чатам (если есть input).
-   * 2) Сниффер XHR/JSON: вытаскиваем URL канала из ответов.
-   * 3) Scan+scroll: ищем по тексту в левой панели.
+   * 1) Если есть bound chat URL — открываем его.
+   * 2) Поиск по чатам (если есть input).
+   * 3) Сниффер XHR/JSON: вытаскиваем URL канала из ответов.
+   * 4) Scan+scroll: ищем по тексту в левой панели.
    */
   private async openTargetChat() {
     const page = this.mustPage();
@@ -336,12 +347,34 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
     throw new Error(`Chat not found after scan+scroll: ${target}`);
   }
 
+  isMessengerUrl(url: string | null): boolean {
+    return /avito\.ru\/(profile\/)?messenger(\/|$)/i.test(url ?? '');
+  }
+
+  private isMessengerChannelUrl(url: string | null): boolean {
+    return /\/messenger\/channel\//i.test(url ?? '');
+  }
+
+  private setActivePage(page: Page, reason: string) {
+    this.page = page;
+    const url = page.url();
+    if (url) {
+      this.lastMessengerUrl = url;
+    }
+    this.bus.emit({
+      type: 'status',
+      level: 'info',
+      message: `Switched active page (${reason}): ${url}`,
+      at: new Date().toISOString(),
+    });
+  }
+
   /** Returns current Puppeteer page URL (for /bind/current). */
   getCurrentUrl(): string | null {
     try {
       const url = this.page?.url?.() ?? null;
-      if (url && /avito\.ru\/(profile\/)?messenger\//i.test(url)) return url;
-      if (this.lastMessengerUrl && /avito\.ru\/(profile\/)?messenger\//i.test(this.lastMessengerUrl)) {
+      if (url && this.isMessengerUrl(url)) return url;
+      if (this.lastMessengerUrl && this.isMessengerUrl(this.lastMessengerUrl)) {
         return this.lastMessengerUrl;
       }
     } catch {}
@@ -355,9 +388,8 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
       const pages = await this.browser.pages();
       for (const p of pages) {
         const url = p.url();
-        if (/avito\.ru\/(profile\/)?messenger\//i.test(url)) {
-          this.page = p;
-          this.lastMessengerUrl = url;
+        if (this.isMessengerUrl(url)) {
+          this.setActivePage(p, 'messenger-tab');
           return url;
         }
       }
@@ -374,27 +406,46 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async pickBestBindUrl(currentUrl: string | null): Promise<string | null> {
+  async getBestBindableUrl(): Promise<string | null> {
     try {
       if (this.browser) {
         const pages = await this.browser.pages();
-        const channel = pages.find((p) => /\/messenger\/channel\//i.test(p.url()));
+        const channel = pages.find((p) => this.isMessengerChannelUrl(p.url()));
         if (channel) {
-          this.page = channel;
-          this.lastMessengerUrl = channel.url();
+          this.setActivePage(channel, 'best-bind-channel');
           return channel.url();
         }
 
-        const messenger = pages.find((p) => /\/messenger/i.test(p.url()));
+        const messenger = pages.find((p) => this.isMessengerUrl(p.url()));
         if (messenger) {
-          this.page = messenger;
-          this.lastMessengerUrl = messenger.url();
+          this.setActivePage(messenger, 'best-bind-messenger');
           return messenger.url();
         }
       }
     } catch {}
 
-    return currentUrl;
+    return this.getActiveUrl() ?? this.getCurrentUrl();
+  }
+
+  private installPopupHandlers(page: Page) {
+    page.on('popup', async (popup) => {
+      if (!popup) return;
+      this.installPopupHandlers(popup);
+      await this.maybeAdoptMessengerPage(popup, 'popup');
+    });
+    page.on('framenavigated', async (frame) => {
+      if (frame !== page.mainFrame()) return;
+      await this.maybeAdoptMessengerPage(page, 'navigate');
+    });
+  }
+
+  private async maybeAdoptMessengerPage(page: Page, reason: string) {
+    try {
+      const url = page.url();
+      if (this.isMessengerChannelUrl(url) || this.isMessengerUrl(url)) {
+        this.setActivePage(page, reason);
+      }
+    } catch {}
   }
 
   private async maybeLoadCookies(page: Page) {
@@ -445,7 +496,7 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
     if (!url) return;
     const autoBind = String(process.env.AUTO_BIND_ON_OPEN ?? 'false') === 'true';
     if (!autoBind) return;
-    if (!/avito\.ru\/(profile\/)?messenger\//i.test(url)) return;
+    if (!this.isMessengerUrl(url)) return;
 
     try {
       const state = { url, boundAt: new Date().toISOString(), reason };
@@ -467,7 +518,7 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
       const u = String(j?.url ?? '').trim();
       if (!u) return null;
       // keep it strict: only messenger chat URLs
-      if (!/avito\.ru\/(profile\/)?messenger\//i.test(u)) return null;
+      if (!this.isMessengerUrl(u)) return null;
       return u;
     } catch {
       return null;

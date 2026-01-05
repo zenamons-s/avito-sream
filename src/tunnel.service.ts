@@ -43,23 +43,20 @@ export class TunnelService implements OnModuleInit, OnModuleDestroy {
       at: new Date().toISOString(),
     });
 
-    this.process = spawn(command, {
+    const child = spawn(command, {
       shell: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
       env: process.env,
     });
+    this.process = child;
 
-    if (this.process.stdout) {
-      this.stdoutRl = readline.createInterface({ input: this.process.stdout });
-      this.stdoutRl.on('line', (line) => this.handleTunnelOutput('stdout', line));
-    }
+    this.stdoutRl = readline.createInterface({ input: child.stdout });
+    this.stdoutRl.on('line', (line) => this.handleTunnelOutput('stdout', line));
 
-    if (this.process.stderr) {
-      this.stderrRl = readline.createInterface({ input: this.process.stderr });
-      this.stderrRl.on('line', (line) => this.handleTunnelOutput('stderr', line));
-    }
+    this.stderrRl = readline.createInterface({ input: child.stderr });
+    this.stderrRl.on('line', (line) => this.handleTunnelOutput('stderr', line));
 
-    this.process.on('error', (err) => {
+    child.on('error', (err) => {
       this.bus.emit({
         type: 'status',
         level: 'error',
@@ -68,7 +65,7 @@ export class TunnelService implements OnModuleInit, OnModuleDestroy {
       });
     });
 
-    this.process.on('exit', (code, signal) => {
+    child.on('exit', (code, signal) => {
       const detail = `code=${code ?? 'null'}, signal=${signal ?? 'null'}`;
       if (this.shuttingDown) {
         this.bus.emit({

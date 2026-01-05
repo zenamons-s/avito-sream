@@ -472,7 +472,17 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
       }
     } catch {}
 
-    return this.getActiveUrl() ?? this.getCurrentUrl();
+    return this.page?.url?.() ?? this.getCurrentUrl();
+  }
+
+  async debugListPages(): Promise<string[]> {
+    try {
+      if (!this.browser) return [];
+      const pages = await this.browser.pages();
+      return pages.map((p) => p.url());
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -514,6 +524,7 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
   private installPopupHandlers(page: Page) {
     page.on('popup', async (popup) => {
       if (!popup) return;
+      this.page = popup;
       this.installPopupHandlers(popup);
       await this.maybeAdoptMessengerPage(popup, 'popup');
     });

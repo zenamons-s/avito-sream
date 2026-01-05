@@ -37,16 +37,18 @@ export class BindController {
   @Post('current')
   async bindCurrent() {
     const initialUrl = ((await this.watcher.getBestBindableUrl()) ?? '').trim();
+    const debugUrls = await this.watcher.debugListPages();
+    this.emitStatus('info', `Bind debug pages: ${debugUrls.join(' | ')}`);
     if (!initialUrl) {
       const message = 'No active Puppeteer page URL (is browser running?)';
       this.emitStatus('warn', message);
-      return { ok: false, message };
+      return { ok: false, message, debugUrls };
     }
 
     if (!messengerUrlRe.test(initialUrl)) {
       const message = `Current URL does not look like Avito messenger: ${initialUrl}`;
       this.emitStatus('warn', message);
-      return { ok: false, message, url: initialUrl };
+      return { ok: false, message, url: initialUrl, debugUrls };
     }
 
     let finalUrl = initialUrl;

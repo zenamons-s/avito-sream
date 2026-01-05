@@ -26,6 +26,16 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
   constructor(private readonly bus: EventBus) {}
 
   async onModuleInit() {
+    if (process.env.NODE_ENV === 'test') {
+      this.bus.emit({
+        type: 'status',
+        level: 'info',
+        message: 'Avito watcher skipped in test environment.',
+        at: new Date().toISOString(),
+      });
+      return;
+    }
+
     this.bus.emit({
       type: 'status',
       level: 'info',
@@ -354,6 +364,8 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
     } catch {}
 
     return null;
+  }
+
   getActiveUrl(): string | null {
     try {
       return this.page?.url?.() ?? null;
@@ -383,24 +395,6 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
     } catch {}
 
     return currentUrl;
-  }
-
-  /** Finds any open Puppeteer tab that looks like Avito messenger. */
-  async getMessengerTabUrl(): Promise<string | null> {
-    try {
-      if (!this.browser) return null;
-      const pages = await this.browser.pages();
-      for (const p of pages) {
-        const url = p.url();
-        if (/avito\.ru\/(profile\/)?messenger\//i.test(url)) {
-          this.page = p;
-          this.lastMessengerUrl = url;
-          return url;
-        }
-      }
-    } catch {}
-
-    return null;
   }
 
   private async maybeLoadCookies(page: Page) {

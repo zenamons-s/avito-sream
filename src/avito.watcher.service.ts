@@ -338,6 +338,22 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
     return null;
   }
 
+  /** Finds any open Puppeteer tab that looks like Avito messenger. */
+  async getMessengerTabUrl(): Promise<string | null> {
+    try {
+      if (!this.browser) return null;
+      const pages = await this.browser.pages();
+      for (const p of pages) {
+        const url = p.url();
+        if (/avito\.ru\/(profile\/)?messenger\//i.test(url)) {
+          this.page = p;
+          this.lastMessengerUrl = url;
+          return url;
+        }
+      }
+    } catch {}
+
+    return null;
   getActiveUrl(): string | null {
     try {
       return this.page?.url?.() ?? null;

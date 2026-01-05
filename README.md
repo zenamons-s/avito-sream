@@ -6,6 +6,16 @@
 - Транслирует новые сообщения на фронтенд в реальном времени через WebSocket `/ws`
 - Показывает простой фронтенд на `/` (статик из `src/public`)
 
+Ссылка на CloudPub туннель: https://<ваш-cloudpub-URL>/
+
+## Архитектура и подход
+
+- **Nest.js модуль и API**: `AppModule` подключает контроллеры (`HealthController`, `BindController`), шлюз (`WsGateway`) и сервисы (`AvitoWatcherService`, `TunnelService`, `CloudpubService`).
+- **Браузерная автоматизация**: `AvitoWatcherService` управляет Puppeteer, открывает Avito Messenger, держит сессию и следит за новыми сообщениями.
+- **Событийная шина**: `EventBus` используется для отправки статусов и событий между сервисами и WS.
+- **WebSocket + фронт**: `WsGateway` публикует события на фронтенд, а статические файлы UI лежат в `src/public`.
+- **Туннель наружу**: `CloudpubService` (или универсальный `TunnelService`) поднимает внешний URL для доступа к UI/WS.
+
 ## Быстрый старт
 
 ```bash

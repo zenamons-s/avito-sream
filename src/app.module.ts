@@ -8,6 +8,7 @@ import { BindController } from './bind.controller';
 import { WsGateway } from './ws.gateway';
 import { EventBus } from './event-bus';
 import { AvitoWatcherService } from './avito.watcher.service';
+import { TunnelService } from './tunnel.service';
 
 @Module({
   imports: [
@@ -17,7 +18,6 @@ import { AvitoWatcherService } from './avito.watcher.service';
     }),
   ],
   controllers: [HealthController, BindController],
-  providers: [AppService, WsGateway, EventBus, AvitoWatcherService],
+  providers: [AppService, WsGateway, EventBus, AvitoWatcherService, TunnelService],
 })
 export class AppModule {}
-

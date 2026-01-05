@@ -21,7 +21,7 @@ npm run start:dev
 Сессия сохраняется в `.avito-profile` и в следующих запусках обычно авторизация уже не нужна.
 
 #### Автоматизация авторизации (headless)
-Если нужно без UI, можно передать cookies через переменные окружения:
+Если нужно без UI, можно передать cookies через переменные окружения. **Автоматизация логина без хранения пароля реализуется только через cookies.**
 ```
 AVITO_COOKIES_PATH=/path/to/cookies.json
 # или
@@ -30,6 +30,13 @@ AVITO_COOKIES_JSON='[{"name":"sid","value":"...","domain":".avito.ru","path":"/"
 AVITO_COOKIES_B64=eyJuYW1lIjoic2lkIiwidmFsdWUiOiIuLi4ifQ==
 ```
 Cookies можно экспортировать из браузера любым cookie-exporter расширением. После загрузки cookies watcher попытается открыть мессенджер без ручного логина.
+
+Если вы готовы хранить пароль, можно задать:
+```
+AVITO_LOGIN=...
+AVITO_PASSWORD=...
+```
+При необходимости подтверждения (2FA) сервис будет ждать завершения авторизации (по умолчанию 120с, настраивается через `AVITO_2FA_TIMEOUT_MS`).
 
 Если Avito плохо работает в headless — для демо лучше запускать так (без видимого окна, но НЕ headless):
 ```bash
@@ -47,6 +54,15 @@ cloudpub http 3000
 
 Открой внешний URL от cloudpub — там будет тот же фронт и подключение к WS.
 Если cloudpub не установлен, установи по инструкции: https://cloudpub.ru/ (CLI).
+
+### Автозапуск туннеля и health-check
+Можно запускать туннель вместе с сервисом и смотреть его статус в WS:
+```
+TUNNEL_COMMAND="cloudpub http 3000"
+TUNNEL_HEALTH_URL=https://<ваш-URL>/
+TUNNEL_HEALTH_INTERVAL_MS=30000
+TUNNEL_HEALTH_TIMEOUT_MS=5000
+```
 
 ## Отладка
 Если watcher падает, он сохраняет:

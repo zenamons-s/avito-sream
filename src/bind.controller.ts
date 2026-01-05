@@ -33,8 +33,14 @@ export class BindController {
     return {
       ok: true,
       bound: true,
+    return {
+      ok: true,
+      bound: true,
+      return { ok: false };
+    }
+    return {
+      ok: true,
       url: state?.url ?? null,
-      boundAt: state?.boundAt ?? null,
     };
   }
 
@@ -77,6 +83,8 @@ export class BindController {
     });
 
     return { ok: true, url: finalUrl, bound: true, boundAt: state.boundAt, message: 'Chat bound' };
+    return { ok: true, url: finalUrl, bound: true };
+    return { ok: true, url: finalUrl };
   }
 
   @Post('clear')

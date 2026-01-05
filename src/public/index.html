@@ -39,7 +39,8 @@
       const j = await r.json();
       if (j?.bound || j?.ok) {
         bindStateEl.textContent = 'bind: ✅';
-        bindStateEl.title = j.url || '';
+        const at = j.boundAt ? ` (${j.boundAt})` : '';
+        bindStateEl.title = (j.url || '') + at;
       } else {
         bindStateEl.textContent = 'bind: ✖';
         bindStateEl.title = '';

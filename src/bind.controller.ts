@@ -33,6 +33,9 @@ export class BindController {
     return {
       ok: true,
       bound: true,
+    return {
+      ok: true,
+      bound: true,
       return { ok: false };
     }
     return {
@@ -79,6 +82,7 @@ export class BindController {
       at: new Date().toISOString(),
     });
 
+    return { ok: true, url: finalUrl, bound: true, boundAt: state.boundAt, message: 'Chat bound' };
     return { ok: true, url: finalUrl, bound: true };
     return { ok: true, url: finalUrl };
   }

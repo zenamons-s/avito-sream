@@ -6,6 +6,8 @@ import { EventBus } from './event-bus';
 
 type BindState = { url: string; boundAt: string };
 
+const messengerUrlRe = /avito\.ru\/(profile\/)?messenger(\/|$)/i;
+
 @Controller('bind')
 export class BindController {
   private readonly bindFilePath = path.join(process.cwd(), '.avito-target.json');
@@ -18,10 +20,19 @@ export class BindController {
   @Get('status')
   status() {
     const state = this.read();
+    const ok = Boolean(state?.url);
+    this.bus.emit({
+      type: 'status',
+      level: ok ? 'info' : 'warn',
+      message: ok ? `Bind status: ${state?.url}` : 'Bind status: not bound',
+      at: new Date().toISOString(),
+    });
+    if (!ok) {
+      return { ok: false };
+    }
     return {
-      bound: Boolean(state?.url),
+      ok: true,
       url: state?.url ?? null,
-      boundAt: state?.boundAt ?? null,
     };
   }
 
@@ -42,7 +53,7 @@ export class BindController {
       });
       return { ok: false, message };
     }
-    if (!this.watcher.isMessengerUrl(finalUrl)) {
+    if (!messengerUrlRe.test(finalUrl)) {
       const message = `Current URL does not look like Avito messenger: ${finalUrl}`;
       this.bus.emit({
         type: 'status',
@@ -50,18 +61,7 @@ export class BindController {
         message,
         at: new Date().toISOString(),
       });
-      return { ok: false, message };
-    const activeUrl = (this.watcher.getActiveUrl() ?? '').trim();
-    const picked = await this.watcher.pickBestBindUrl(activeUrl);
-    const finalUrl = (picked ?? url ?? '').trim();
-    if (!finalUrl) {
-      return { ok: false, error: 'No active Puppeteer page URL (is browser running?)' };
-    }
-    if (!/avito\.ru\/(profile\/)?messenger\//i.test(finalUrl)) {
-      return {
-        ok: false,
-        error: `Current URL does not look like Avito messenger: ${finalUrl}`,
-      };
+      return { ok: false, message, url: finalUrl };
     }
 
     const state: BindState = { url: finalUrl, boundAt: new Date().toISOString() };
@@ -74,7 +74,7 @@ export class BindController {
       at: new Date().toISOString(),
     });
 
-    return { ok: true, message: `Bound current chat: ${finalUrl}`, ...state };
+    return { ok: true, url: finalUrl };
   }
 
   @Post('clear')
@@ -101,7 +101,7 @@ export class BindController {
       const url = String(j?.url ?? '').trim();
       const boundAt = String(j?.boundAt ?? '').trim();
       if (!url) return null;
-      return { url, boundAt: boundAt || null } as any;
+      return { url, boundAt: boundAt || null } as BindState;
     } catch {
       return null;
     }

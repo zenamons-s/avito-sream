@@ -51,6 +51,17 @@ export class BindController {
         at: new Date().toISOString(),
       });
       return { ok: false, message };
+    const activeUrl = (this.watcher.getActiveUrl() ?? '').trim();
+    const picked = await this.watcher.pickBestBindUrl(activeUrl);
+    const finalUrl = (picked ?? url ?? '').trim();
+    if (!finalUrl) {
+      return { ok: false, error: 'No active Puppeteer page URL (is browser running?)' };
+    }
+    if (!/avito\.ru\/(profile\/)?messenger\//i.test(finalUrl)) {
+      return {
+        ok: false,
+        error: `Current URL does not look like Avito messenger: ${finalUrl}`,
+      };
     }
 
     const state: BindState = { url: finalUrl, boundAt: new Date().toISOString() };

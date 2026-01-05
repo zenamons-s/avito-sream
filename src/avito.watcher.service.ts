@@ -131,6 +131,9 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
 
   private async openMessengerWithAuth() {
     const page = this.mustPage();
+    const login = (process.env.AVITO_LOGIN ?? '').trim();
+    const password = (process.env.AVITO_PASSWORD ?? '').trim();
+    const hasCredentials = login.length > 0 && password.length > 0;
 
     const candidates = [
       'https://www.avito.ru/profile/messenger',
@@ -169,7 +172,52 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
       if (page.url().includes('login')) {
         const headlessEnv = String(process.env.HEADLESS ?? 'false') === 'true';
 
-        if (headlessEnv) {
+        if (!hasCredentials) {
+          this.bus.emit({
+            type: 'status',
+            level: 'info',
+            message: 'Auth via cookies/manual (AVITO_LOGIN/AVITO_PASSWORD not set).',
+            at: new Date().toISOString(),
+          });
+        } else {
+          this.bus.emit({
+            type: 'status',
+            level: 'info',
+            message: 'Attempting auto-login via form with AVITO_LOGIN/AVITO_PASSWORD.',
+            at: new Date().toISOString(),
+          });
+
+          const filled = await this.tryFillLoginForm(login, password);
+          if (!filled) {
+            this.bus.emit({
+              type: 'status',
+              level: 'warn',
+              message: 'Login form not detected. Falling back to manual/cookie auth.',
+              at: new Date().toISOString(),
+            });
+          } else {
+            await this.submitLoginForm();
+            const twoFaTimeout = Number(process.env.AVITO_2FA_TIMEOUT_MS ?? 120000);
+            this.bus.emit({
+              type: 'status',
+              level: 'info',
+              message: `Waiting for 2FA confirmation (timeout ${Math.round(twoFaTimeout / 1000)}s)…`,
+              at: new Date().toISOString(),
+            });
+
+            const authed = await this.waitForAuthCompletion(twoFaTimeout);
+            if (!authed) {
+              this.bus.emit({
+                type: 'status',
+                level: 'warn',
+                message: '2FA confirmation timeout. Complete confirmation or use cookies.',
+                at: new Date().toISOString(),
+              });
+            }
+          }
+        }
+
+        if (headlessEnv && page.url().includes('login')) {
           this.bus.emit({
             type: 'status',
             level: 'error',
@@ -777,6 +825,72 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
         { timeout: 15000 },
       )
       .catch(() => undefined);
+  }
+
+  private async tryFillLoginForm(login: string, password: string): Promise<boolean> {
+    const page = this.mustPage();
+
+    const loginInput =
+      (await page.$(
+        'input[type="tel"], input[type="email"], input[name*="login" i], input[name*="phone" i], input[autocomplete="username"]',
+      )) ?? null;
+    const passwordInput =
+      (await page.$('input[type="password"], input[autocomplete="current-password"]')) ?? null;
+
+    if (!loginInput || !passwordInput) return false;
+
+    await loginInput.click({ clickCount: 3 }).catch(() => undefined);
+    await page.keyboard.down(process.platform === 'darwin' ? 'Meta' : 'Control');
+    await page.keyboard.press('KeyA');
+    await page.keyboard.up(process.platform === 'darwin' ? 'Meta' : 'Control');
+    await page.keyboard.type(login, { delay: 40 });
+
+    await passwordInput.click({ clickCount: 3 }).catch(() => undefined);
+    await page.keyboard.down(process.platform === 'darwin' ? 'Meta' : 'Control');
+    await page.keyboard.press('KeyA');
+    await page.keyboard.up(process.platform === 'darwin' ? 'Meta' : 'Control');
+    await page.keyboard.type(password, { delay: 40 });
+
+    return true;
+  }
+
+  private async submitLoginForm() {
+    const page = this.mustPage();
+    const clicked = await page.evaluate(() => {
+      const isVisible = (el: HTMLElement) => {
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      };
+      const text = (el: HTMLElement) => (el.innerText || el.textContent || '').trim().toLowerCase();
+      const looksLikeSubmit = (el: HTMLElement) =>
+        ['войти', 'вход', 'login', 'sign in', 'продолжить', 'continue'].some((t) => text(el).includes(t));
+
+      const candidates = Array.from(
+        document.querySelectorAll<HTMLElement>('button[type="submit"], input[type="submit"], button, a, div'),
+      ).filter((el) => isVisible(el) && looksLikeSubmit(el));
+
+      const target = candidates[0];
+      if (!target) return false;
+
+      target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+      target.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      return true;
+    });
+
+    if (!clicked) {
+      await page.keyboard.press('Enter').catch(() => undefined);
+    }
+  }
+
+  private async waitForAuthCompletion(timeoutMs: number): Promise<boolean> {
+    const page = this.mustPage();
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      await sleep(1000);
+      if (!page.url().includes('login')) return true;
+    }
+    return !page.url().includes('login');
   }
 
   private async watchLoop() {

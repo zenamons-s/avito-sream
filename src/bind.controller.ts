@@ -6,7 +6,8 @@ import { EventBus } from './event-bus';
 
 type BindState = { url: string; boundAt: string };
 
-const messengerUrlRe = /avito\.ru\/(profile\/)?messenger(\/|$)/i;
+const messengerUrlRe = /avito\.ru\/(profile\/)?messenger(\/|\?|$)/i;
+const messengerChannelUrlRe = /avito\.ru\/(profile\/)?messenger\/channel\//i;
 
 @Controller('bind')
 export class BindController {
@@ -35,24 +36,41 @@ export class BindController {
    */
   @Post('current')
   async bindCurrent() {
-    const finalUrl = ((await this.watcher.getBestBindableUrl()) ?? '').trim();
-    if (!finalUrl) {
+    const initialUrl = ((await this.watcher.getBestBindableUrl()) ?? '').trim();
+    if (!initialUrl) {
       const message = 'No active Puppeteer page URL (is browser running?)';
       this.emitStatus('warn', message);
       return { ok: false, message };
     }
 
-    if (!messengerUrlRe.test(finalUrl)) {
-      const message = `Current URL does not look like Avito messenger: ${finalUrl}`;
+    if (!messengerUrlRe.test(initialUrl)) {
+      const message = `Current URL does not look like Avito messenger: ${initialUrl}`;
       this.emitStatus('warn', message);
-      return { ok: false, message, url: finalUrl };
+      return { ok: false, message, url: initialUrl };
+    }
+
+    let finalUrl = initialUrl;
+    let warning: string | undefined;
+    if (!messengerChannelUrlRe.test(initialUrl)) {
+      const ensured = await this.watcher.ensureChannelUrl();
+      if (ensured?.url) {
+        finalUrl = ensured.url;
+      }
+      if (!ensured?.channel) {
+        warning = 'Bound messenger search page, not channel';
+      }
     }
 
     const state: BindState = { url: finalUrl, boundAt: new Date().toISOString() };
     fs.writeFileSync(this.bindFilePath, JSON.stringify(state, null, 2), 'utf-8');
 
-    this.emitStatus('info', `Target chat bound: ${finalUrl}`);
-    return { ok: true, url: finalUrl };
+    const okMessage = `Target chat bound: ${finalUrl}`;
+    if (warning) {
+      this.emitStatus('warn', `${okMessage}. ${warning}`);
+    } else {
+      this.emitStatus('info', okMessage);
+    }
+    return warning ? { ok: true, url: finalUrl, warning } : { ok: true, url: finalUrl };
   }
 
   @Post('clear')

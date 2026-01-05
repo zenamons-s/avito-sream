@@ -55,9 +55,16 @@
       const r = await fetch('/bind/current', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
       const j = await r.json().catch(() => ({}));
       if (j?.ok) {
-        addBlock(new Date().toISOString() + ' | bind', `${j?.message || 'Bound current chat ✅'}${j?.url ? `\n${j.url}` : ''}`);
+        const parts = [];
+        if (j?.message) parts.push(j.message);
+        if (j?.warning) parts.push(`warning: ${j.warning}`);
+        if (parts.length === 0) parts.push('Bound current chat ✅');
+        if (j?.url) parts.push(j.url);
+        addBlock(new Date().toISOString() + ' | bind', parts.join('\n'));
       } else {
-        addBlock(new Date().toISOString() + ' | bind', `Bind failed: ${j?.message || 'unknown'}`);
+        const parts = [`Bind failed: ${j?.message || 'unknown'}`];
+        if (j?.url) parts.push(j.url);
+        addBlock(new Date().toISOString() + ' | bind', parts.join('\n'));
       }
     } catch (e) {
       addBlock(new Date().toISOString() + ' | bind', 'Bind request error');

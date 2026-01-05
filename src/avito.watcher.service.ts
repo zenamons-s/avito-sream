@@ -396,10 +396,10 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
   }
 
   isMessengerUrl(url: string | null): boolean {
-    return /avito\.ru\/(profile\/)?messenger(\/|$)/i.test(url ?? '');
+    return /avito\.ru\/(profile\/)?messenger(\/|\?|$)/i.test(url ?? '');
   }
 
-  private isMessengerChannelUrl(url: string | null): boolean {
+  isMessengerChannelUrl(url: string | null): boolean {
     return /\/messenger\/channel\//i.test(url ?? '');
   }
 
@@ -473,6 +473,42 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
     } catch {}
 
     return this.getActiveUrl() ?? this.getCurrentUrl();
+  }
+
+  /**
+   * Ensures the active tab points to a messenger channel URL.
+   * Returns the resolved URL and whether it is a channel URL.
+   */
+  async ensureChannelUrl(): Promise<{ url: string | null; channel: boolean }> {
+    const page = this.mustPage();
+    const current = page.url();
+    if (!this.isMessengerUrl(current)) {
+      return { url: current, channel: false };
+    }
+    if (this.isMessengerChannelUrl(current)) {
+      return { url: current, channel: true };
+    }
+
+    const target = (process.env.TARGET_CONTACT ?? 'Рушан').trim();
+
+    this.bus.emit({
+      type: 'status',
+      level: 'info',
+      message: `Attempting to resolve messenger channel for: ${target}`,
+      at: new Date().toISOString(),
+    });
+
+    let clicked = await this.clickDropdownResultByTarget(target);
+    if (!clicked) {
+      clicked = await this.clickFirstDialog();
+    }
+
+    if (clicked) {
+      await this.waitForChannelUrl().catch(() => undefined);
+    }
+
+    const url = page.url();
+    return { url, channel: this.isMessengerChannelUrl(url) };
   }
 
   private installPopupHandlers(page: Page) {
@@ -673,6 +709,146 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
     }
 
     return this.clickChatByText(target);
+  }
+
+  private async clickDropdownResultByTarget(target: string): Promise<boolean> {
+    const page = this.mustPage();
+    const clicked = await page.evaluate((name) => {
+      const norm = (s: string) => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const target = norm(name);
+
+      const getText = (el: HTMLElement) =>
+        norm(
+          el.getAttribute('aria-label') ||
+            el.getAttribute('title') ||
+            el.textContent ||
+            el.innerText ||
+            '',
+        );
+
+      const isClickable = (x: HTMLElement) =>
+        x.tagName === 'A' ||
+        x.tagName === 'BUTTON' ||
+        x.getAttribute('role') === 'button' ||
+        x.getAttribute('role') === 'option' ||
+        x.getAttribute('role') === 'link' ||
+        x.tabIndex >= 0 ||
+        typeof (x as any).onclick === 'function' ||
+        getComputedStyle(x).cursor === 'pointer';
+
+      const dropdown =
+        (document.querySelector('[role="listbox"]') as HTMLElement | null) ||
+        (document.querySelector('[data-marker*="suggest"]') as HTMLElement | null) ||
+        (document.querySelector('[data-marker*="dropdown"]') as HTMLElement | null);
+
+      if (!dropdown) return false;
+
+      const options = Array.from(
+        dropdown.querySelectorAll<HTMLElement>('[role="option"], [role="link"], a, button, div, span'),
+      )
+        .map((el) => ({ el, text: getText(el) }))
+        .filter((x) => x.text.includes(target));
+
+      if (options.length === 0) return false;
+
+      options.sort((a, b) => (a.el.innerText?.length ?? 0) - (b.el.innerText?.length ?? 0));
+      let el: HTMLElement | null = options[0].el;
+
+      let cur: HTMLElement | null = el;
+      for (let i = 0; i < 10 && cur; i++) {
+        if (isClickable(cur)) {
+          el = cur;
+          break;
+        }
+        cur = cur.parentElement as HTMLElement | null;
+      }
+      if (!el) return false;
+
+      if (!isClickable(el) && el.closest) {
+        const clickable = el.closest('a, button, [role="button"], [role="option"], [role="link"]') as HTMLElement | null;
+        if (clickable) el = clickable;
+      }
+
+      el.scrollIntoView({ block: 'center' });
+      el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+      el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      return true;
+    }, target);
+
+    if (clicked) {
+      await sleep(900);
+    }
+    return clicked;
+  }
+
+  private async clickFirstDialog(): Promise<boolean> {
+    const page = this.mustPage();
+    const clicked = await page.evaluate(() => {
+      const sidebar =
+        (document.querySelector('aside') as HTMLElement | null) ||
+        (document.querySelector('nav') as HTMLElement | null) ||
+        (document.querySelector('[role="navigation"]') as HTMLElement | null) ||
+        document.body;
+
+      const isVisible = (el: HTMLElement) => {
+        const rect = el.getBoundingClientRect();
+        return rect.width > 2 && rect.height > 2;
+      };
+
+      const isClickable = (x: HTMLElement) =>
+        x.tagName === 'A' ||
+        x.tagName === 'BUTTON' ||
+        x.getAttribute('role') === 'button' ||
+        x.getAttribute('role') === 'link' ||
+        typeof (x as any).onclick === 'function' ||
+        getComputedStyle(x).cursor === 'pointer';
+
+      const links = Array.from(sidebar.querySelectorAll<HTMLAnchorElement>('a[href]'))
+        .filter((el) => isVisible(el))
+        .filter((el) => el.href.includes('/messenger/channel/'));
+
+      let el: HTMLElement | null = links[0] ?? null;
+
+      if (!el) {
+        const candidates = Array.from(
+          sidebar.querySelectorAll<HTMLElement>('a, button, [role="button"], [role="link"], div, span'),
+        ).filter((node) => isVisible(node));
+
+        for (const node of candidates) {
+          let cur: HTMLElement | null = node;
+          for (let i = 0; i < 6 && cur; i++) {
+            if (isClickable(cur)) {
+              el = cur;
+              break;
+            }
+            cur = cur.parentElement as HTMLElement | null;
+          }
+          if (el) break;
+        }
+      }
+
+      if (!el) return false;
+
+      el.scrollIntoView({ block: 'center' });
+      el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+      el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      return true;
+    });
+
+    if (clicked) {
+      await sleep(900);
+    }
+    return clicked;
+  }
+
+  private async waitForChannelUrl() {
+    const page = this.mustPage();
+    await page.waitForFunction(
+      () => window.location.pathname.includes('/messenger/channel/'),
+      { timeout: 15000 },
+    );
   }
 
   private async findChannelUrlViaNetwork(targetName: string, timeoutMs: number): Promise<string | null> {

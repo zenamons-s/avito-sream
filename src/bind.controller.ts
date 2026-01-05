@@ -28,6 +28,11 @@ export class BindController {
       at: new Date().toISOString(),
     });
     if (!ok) {
+      return { ok: false, bound: false };
+    }
+    return {
+      ok: true,
+      bound: true,
       return { ok: false };
     }
     return {
@@ -74,6 +79,7 @@ export class BindController {
       at: new Date().toISOString(),
     });
 
+    return { ok: true, url: finalUrl, bound: true };
     return { ok: true, url: finalUrl };
   }
 

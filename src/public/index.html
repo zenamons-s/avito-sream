@@ -37,7 +37,7 @@
     try {
       const r = await fetch('/bind/status');
       const j = await r.json();
-      if (j?.bound) {
+      if (j?.bound || j?.ok) {
         bindStateEl.textContent = 'bind: ✅';
         bindStateEl.title = j.url || '';
       } else {

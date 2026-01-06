@@ -16,7 +16,7 @@ import { ConfigController } from './config.controller';
 @Module({
   imports: [
     ServeStaticModule.forRoot({
-      rootPath: join(__dirname, 'public'),
+      rootPath: join(process.cwd(), 'src', 'public'),
       serveRoot: '/',
     }),
   ],

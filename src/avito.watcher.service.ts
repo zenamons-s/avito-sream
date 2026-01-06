@@ -1157,50 +1157,139 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
     const target = (process.env.TARGET_CONTACT ?? 'Рушан').trim();
 
     const ok = await page.evaluate((targetName) => {
-      const norm = (s: string) => (s || '').replace(/\s+/g, ' ').trim();
+      if ((window as any).__avitoObserverInstalled) return true;
 
-      // пытаемся взять контейнер сообщений
+      const norm = (s: string) => (s || '').replace(/\s+/g, ' ').trim();
+      const messageSelectors = [
+        '[data-marker*="message"]',
+        '[data-marker*="msg"]',
+        '[role="listitem"]',
+        'article',
+        '[class*="message"]',
+        '[class*="bubble"]',
+      ].join(', ');
+
+      const isInsideNav = (el: HTMLElement | null) =>
+        !!el?.closest('nav, aside, header, [role="navigation"]');
+
+      const isUiNoise = (text: string) => {
+        const t = norm(text).toLowerCase();
+        if (!t) return true;
+
+        const exactNoise = new Set([
+          'уведомления',
+          'кошелек',
+          'кошелёк',
+          'платные услуги',
+          'мои резюме',
+          'избранное',
+          'объявления',
+          'профиль',
+          'настройки',
+          'помощь',
+          'поддержка',
+          'партнерская программа',
+          'услуги',
+          'доставка',
+          'звонки',
+        ]);
+
+        if (exactNoise.has(t)) return true;
+        if (/^сегодня$|^вчера$/.test(t)) return true;
+
+        const dateRe =
+          /^(понедельник|вторник|среда|четверг|пятница|суббота|воскресенье),?\s+\d{1,2}\s+(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)$/i;
+
+        if (dateRe.test(t)) return true;
+        if (/войти|регистрация/i.test(t)) return true;
+
+        return false;
+      };
+
+      const extractMessageText = (el: HTMLElement) => {
+        const raw = el.innerText || el.textContent || '';
+        const lines = raw.split('\n').map(norm).filter(Boolean);
+        return lines.length ? lines[lines.length - 1] : norm(raw);
+      };
+
+      const countMessages = (root: HTMLElement) =>
+        Array.from(root.querySelectorAll<HTMLElement>(messageSelectors)).filter((node) => {
+          if (isInsideNav(node)) return false;
+          const text = extractMessageText(node);
+          return text.length > 0 && text.length < 4000 && !isUiNoise(text);
+        }).length;
+
       const pickContainer = (): HTMLElement | null => {
+        const candidates: HTMLElement[] = [];
+
         const roleLog = document.querySelector('[role="log"]') as HTMLElement | null;
-        if (roleLog) return roleLog;
+        if (roleLog) candidates.push(roleLog);
+
+        const dataMarker = document.querySelector('[data-marker*="messages/chat"]') as HTMLElement | null;
+        if (dataMarker) candidates.push(dataMarker);
 
         const input = document.querySelector('textarea, [contenteditable="true"]') as HTMLElement | null;
-        const main = (input?.closest('main') as HTMLElement | null) || (document.querySelector('main') as HTMLElement | null);
-        return main || (document.body as HTMLElement);
+        if (input) {
+          const nearMain = input.closest('main') as HTMLElement | null;
+          if (nearMain) candidates.push(nearMain);
+
+          let cur: HTMLElement | null = input;
+          for (let i = 0; i < 6 && cur; i++) {
+            if (cur !== input) candidates.push(cur);
+            cur = cur.parentElement;
+          }
+        }
+
+        const main = document.querySelector('main') as HTMLElement | null;
+        if (main) candidates.push(main);
+
+        const unique = Array.from(new Set(candidates)).filter((el) => !isInsideNav(el));
+        if (unique.length === 0) return null;
+
+        let best: { el: HTMLElement; count: number } | null = null;
+        for (const el of unique) {
+          const count = countMessages(el);
+          if (!best || count > best.count) best = { el, count };
+        }
+
+        if (!best || best.count < 2) return null;
+        return best.el;
       };
 
       const container = pickContainer();
       if (!container) return false;
 
-      const isNoise = (t: string) =>
-        /войти|регистрация|профиль|настройки|объявления|избранное/i.test(t);
-
       // чтобы не спамить одним и тем же
       const seen = new Set<string>();
+      const startTs = Date.now();
+      const graceMs = 1500;
 
       const handleNode = (node: Node) => {
         if (!(node instanceof HTMLElement)) return;
+        if (Date.now() - startTs < graceMs) return;
+        if (isInsideNav(node)) return;
 
-        const text = norm(node.innerText || '');
-        if (!text || text.length < 1 || text.length > 4000) return;
-        if (isNoise(text)) return;
+        const messageNodes: HTMLElement[] = [];
+        if (node.matches?.(messageSelectors)) messageNodes.push(node);
+        messageNodes.push(...Array.from(node.querySelectorAll<HTMLElement>(messageSelectors)));
 
-        // иногда прилетает сразу большая пачка — берём последнюю "логичную" строку
-        const lines = text.split('\n').map(norm).filter(Boolean);
-        const msgText = lines.length ? lines[lines.length - 1] : text;
+        for (const msgNode of messageNodes) {
+          if (isInsideNav(msgNode)) continue;
+          const msgText = extractMessageText(msgNode);
+          if (!msgText || msgText.length > 4000) continue;
+          if (isUiNoise(msgText)) continue;
 
-        const key = msgText;
-        if (seen.has(key)) return;
-        seen.add(key);
-        if (seen.size > 200) {
-          // чистим
-          const arr = Array.from(seen);
-          seen.clear();
-          for (const x of arr.slice(-80)) seen.add(x);
+          if (seen.has(msgText)) continue;
+          seen.add(msgText);
+          if (seen.size > 200) {
+            const arr = Array.from(seen);
+            seen.clear();
+            for (const x of arr.slice(-80)) seen.add(x);
+          }
+
+          // @ts-ignore
+          window.__emitAvitoMessage({ from: targetName, text: msgText, at: new Date().toISOString() });
         }
-
-        // @ts-ignore
-        window.__emitAvitoMessage({ from: targetName, text: msgText, at: new Date().toISOString() });
       };
 
       const obs = new MutationObserver((mutations) => {
@@ -1238,21 +1327,116 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
 
     const text = await page.evaluate(() => {
       const norm = (s: string) => (s || '').replace(/\s+/g, ' ').trim();
-      const roleLog = document.querySelector('[role="log"]') as HTMLElement | null;
+      const messageSelectors = [
+        '[data-marker*="message"]',
+        '[data-marker*="msg"]',
+        '[role="listitem"]',
+        'article',
+        '[class*="message"]',
+        '[class*="bubble"]',
+      ].join(', ');
 
-      const container =
-        roleLog ||
-        (document.querySelector('main') as HTMLElement | null) ||
-        (document.body as HTMLElement);
+      const isInsideNav = (el: HTMLElement | null) =>
+        !!el?.closest('nav, aside, header, [role="navigation"]');
 
-      const candidates = Array.from(container.querySelectorAll<HTMLElement>('div, p, span'))
-        .map((n) => norm(n.innerText))
-        .filter((t) => t && t.length > 0 && t.length < 5000);
+      const isUiNoise = (text: string) => {
+        const t = norm(text).toLowerCase();
+        if (!t) return true;
 
-      // отсекаем явно UI-шум
-      const cleaned = candidates.filter((t) => !/войти|регистрация|профиль|настройки|объявления|избранное/i.test(t));
+        const exactNoise = new Set([
+          'уведомления',
+          'кошелек',
+          'кошелёк',
+          'платные услуги',
+          'мои резюме',
+          'избранное',
+          'объявления',
+          'профиль',
+          'настройки',
+          'помощь',
+          'поддержка',
+          'партнерская программа',
+          'услуги',
+          'доставка',
+          'звонки',
+        ]);
 
-      return cleaned[cleaned.length - 1] ?? '';
+        if (exactNoise.has(t)) return true;
+        if (/^сегодня$|^вчера$/.test(t)) return true;
+
+        const dateRe =
+          /^(понедельник|вторник|среда|четверг|пятница|суббота|воскресенье),?\s+\d{1,2}\s+(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)$/i;
+
+        if (dateRe.test(t)) return true;
+        if (/войти|регистрация/i.test(t)) return true;
+
+        return false;
+      };
+
+      const extractMessageText = (el: HTMLElement) => {
+        const raw = el.innerText || el.textContent || '';
+        const lines = raw.split('\n').map(norm).filter(Boolean);
+        return lines.length ? lines[lines.length - 1] : norm(raw);
+      };
+
+      const countMessages = (root: HTMLElement) =>
+        Array.from(root.querySelectorAll<HTMLElement>(messageSelectors)).filter((node) => {
+          if (isInsideNav(node)) return false;
+          const text = extractMessageText(node);
+          return text.length > 0 && text.length < 4000 && !isUiNoise(text);
+        }).length;
+
+      const pickContainer = (): HTMLElement | null => {
+        const candidates: HTMLElement[] = [];
+
+        const roleLog = document.querySelector('[role="log"]') as HTMLElement | null;
+        if (roleLog) candidates.push(roleLog);
+
+        const dataMarker = document.querySelector('[data-marker*="messages/chat"]') as HTMLElement | null;
+        if (dataMarker) candidates.push(dataMarker);
+
+        const input = document.querySelector('textarea, [contenteditable="true"]') as HTMLElement | null;
+        if (input) {
+          const nearMain = input.closest('main') as HTMLElement | null;
+          if (nearMain) candidates.push(nearMain);
+
+          let cur: HTMLElement | null = input;
+          for (let i = 0; i < 6 && cur; i++) {
+            if (cur !== input) candidates.push(cur);
+            cur = cur.parentElement;
+          }
+        }
+
+        const main = document.querySelector('main') as HTMLElement | null;
+        if (main) candidates.push(main);
+
+        const unique = Array.from(new Set(candidates)).filter((el) => !isInsideNav(el));
+        if (unique.length === 0) return null;
+
+        let best: { el: HTMLElement; count: number } | null = null;
+        for (const el of unique) {
+          const count = countMessages(el);
+          if (!best || count > best.count) best = { el, count };
+        }
+
+        if (!best || best.count < 2) return null;
+        return best.el;
+      };
+
+      const container = pickContainer();
+      if (!container) return '';
+
+      const candidates = Array.from(container.querySelectorAll<HTMLElement>(messageSelectors));
+      for (let i = candidates.length - 1; i >= 0; i -= 1) {
+        const node = candidates[i];
+        if (isInsideNav(node)) continue;
+        const text = extractMessageText(node);
+        if (!text || text.length > 4000) continue;
+        if (isUiNoise(text)) continue;
+        return text;
+      }
+
+      return '';
     });
 
     if (!text) return null;

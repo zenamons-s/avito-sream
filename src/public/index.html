@@ -27,6 +27,7 @@
     <button id="clearBtn">Clear bind</button>
   </div>
   <div id="bindState" class="pill">bind: unknown</div>
+  <div id="hint" style="margin: 10px 0; padding: 8px 10px; background: #fff3cd; border-radius: 8px; display: none;"></div>
   <div id="log"></div>
 
 <script>
@@ -37,6 +38,7 @@
   const clearBtn = document.getElementById('clearBtn');
   const bindStateEl = document.getElementById('bindState');
   const tunnelEl = document.getElementById('tunnel');
+  const hintEl = document.getElementById('hint');
 
   function setBindStatusLines(lines) {
     bindStateEl.innerHTML = '';
@@ -49,6 +51,16 @@
       }
       bindStateEl.appendChild(div);
     }
+  }
+
+  function setHint(active) {
+    if (active) {
+      hintEl.style.display = 'block';
+      hintEl.textContent = 'Открой чат Рушан в окне Chromium (HEADLESS=false) и нажми Bind';
+      return;
+    }
+    hintEl.style.display = 'none';
+    hintEl.textContent = '';
   }
 
   function buildLink(url) {
@@ -69,11 +81,13 @@
         line.append('✅ Bound to channel: ');
         line.appendChild(buildLink(j.url));
         setBindStatusLines([line]);
+        setHint(false);
         return;
       }
 
       if (j?.kind === 'none') {
         setBindStatusLines(['⚠ Not bound']);
+        setHint(true);
         return;
       }
 
@@ -89,8 +103,10 @@
         lines.push('Это поиск. Открой диалог (URL должен содержать /channel/) и нажми Bind.');
       }
       setBindStatusLines(lines);
+      setHint(true);
     } catch {
       setBindStatusLines(['bind: error']);
+      setHint(true);
     }
   }
 
@@ -209,6 +225,10 @@
         const data = JSON.parse(ev.data);
         if (data.type === 'status') {
           statusEl.textContent = `[${data.level}] ${data.message}`;
+          const msg = String(data.message || '').toLowerCase();
+          if (msg.includes('support chat detected') || msg.includes('not bound')) {
+            setHint(true);
+          }
           return;
         }
         if (data.type === 'message') {

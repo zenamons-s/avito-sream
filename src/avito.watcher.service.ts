@@ -19,6 +19,7 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
   private lastFingerprint = '';
   private bridgeInstalled = false;
   private lastMessengerUrl: string | null = null;
+  private supportChatDetected = false;
 
   // Persistently bound chat URL (optional, created via /bind/current)
   private readonly bindFilePath = path.join(process.cwd(), '.avito-target.json');
@@ -63,8 +64,10 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
       try {
         await this.startBrowser();
         await this.openMessengerWithAuth();
-        await this.openTargetChat();
-        await this.watchLoop();
+        const ready = await this.openTargetChat();
+        if (ready) {
+          await this.watchLoop();
+        }
       } catch (e: any) {
         await this.dumpDebugArtifacts('error');
         this.bus.emit({
@@ -263,136 +266,52 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
    * Стратегии по приоритету:
    * 0) Если задан TARGET_CHAT_URL — открываем сразу.
    * 1) Если есть bound chat URL — открываем его.
-   * 2) Поиск по чатам (если есть input).
-   * 3) Сниффер XHR/JSON: вытаскиваем URL канала из ответов.
-   * 4) Scan+scroll: ищем по тексту в левой панели.
    */
-  private async openTargetChat() {
+  private async openTargetChat(): Promise<boolean> {
     const page = this.mustPage();
-    const target = (process.env.TARGET_CONTACT ?? 'Рушан').trim();
     const direct = (process.env.TARGET_CHAT_URL ?? '').trim();
-
-    this.bus.emit({
-      type: 'status',
-      level: 'info',
-      message: `Opening target chat: ${target}`,
-      at: new Date().toISOString(),
-    });
+    let lastAttemptUrl: string | null = null;
 
     await page.waitForSelector('body', { timeout: 60000 });
     await sleep(1000);
 
-    if (direct) {
-      const url = direct.startsWith('http') ? direct : `https://www.avito.ru${direct}`;
-      this.bus.emit({ type: 'status', level: 'info', message: `Using TARGET_CHAT_URL: ${url}`, at: new Date().toISOString() });
-      await page.goto(url, { waitUntil: 'domcontentloaded' });
-      await sleep(1200);
-      await this.waitForChatLikelyOpened();
-      this.lastMessengerUrl = page.url();
-      this.maybePersistBoundChatUrl(this.lastMessengerUrl, 'target-chat-url');
-      return;
-    }
+    while (!this.stopping) {
+      const candidate = await this.resolveTargetChatUrl(direct);
 
-    // 0.5) If chat was bound earlier (manual open + /bind/current) — open it directly
-    const bound = this.readBoundChatUrl();
-    if (bound) {
-      this.bus.emit({
-        type: 'status',
-        level: 'info',
-        message: `Using bound chat URL: ${bound}`,
-        at: new Date().toISOString(),
-      });
-      await page.goto(bound, { waitUntil: 'domcontentloaded' });
-      await sleep(1200);
-      await this.waitForChatLikelyOpened();
-      this.lastMessengerUrl = page.url();
-      this.maybePersistBoundChatUrl(this.lastMessengerUrl, 'bound-chat-url');
-      return;
-    }
-
-    // 1) Поиск в UI
-    const searchInput = await this.findSearchInput();
-    if (searchInput) {
-      this.bus.emit({ type: 'status', level: 'info', message: 'Search input found — trying search', at: new Date().toISOString() });
-
-      await searchInput.click({ clickCount: 3 });
-      await page.keyboard.down(process.platform === 'darwin' ? 'Meta' : 'Control');
-      await page.keyboard.press('KeyA');
-      await page.keyboard.up(process.platform === 'darwin' ? 'Meta' : 'Control');
-      await page.keyboard.type(target, { delay: 60 });
-      // Многие UI показывают результаты только после Enter
-      await sleep(500);
-      await page.keyboard.press('Enter').catch(() => undefined);
-      await sleep(900);
-
-      const clicked = await this.clickSearchResultOrChat(target);
-      if (clicked) {
-        await this.waitForChatLikelyOpened();
-        this.bus.emit({ type: 'status', level: 'info', message: `Chat opened via search: ${target}`, at: new Date().toISOString() });
-        this.lastMessengerUrl = page.url();
-        this.maybePersistBoundChatUrl(this.lastMessengerUrl, 'search');
-        return;
-      }
-
-      this.bus.emit({ type: 'status', level: 'warn', message: 'Search input exists, but no clickable result found — fallback', at: new Date().toISOString() });
-    } else {
-      this.bus.emit({ type: 'status', level: 'info', message: 'Search input not found — trying network sniff', at: new Date().toISOString() });
-    }
-
-    // 2) Сниффер XHR/JSON для получения URL канала
-    const chanUrl = await this.findChannelUrlViaNetwork(target, 20000);
-    if (chanUrl) {
-      this.bus.emit({ type: 'status', level: 'info', message: `Channel URL found via network: ${chanUrl}`, at: new Date().toISOString() });
-      await page.goto(chanUrl, { waitUntil: 'domcontentloaded' });
-      await sleep(1200);
-      await this.waitForChatLikelyOpened();
-      this.lastMessengerUrl = page.url();
-      this.maybePersistBoundChatUrl(this.lastMessengerUrl, 'network-sniff');
-      return;
-    }
-
-    // 3) Scan+scroll
-    this.bus.emit({ type: 'status', level: 'info', message: 'Fallback scan+scroll in sidebar…', at: new Date().toISOString() });
-
-    const maxSteps = Number(process.env.CHAT_SCAN_STEPS ?? 60);
-    for (let step = 0; step < maxSteps; step++) {
-      const clicked = await this.clickChatByText(target);
-      if (clicked) {
-        await this.waitForChatLikelyOpened();
-        this.bus.emit({ type: 'status', level: 'info', message: `Chat opened via scan+scroll: ${target}`, at: new Date().toISOString() });
-        this.lastMessengerUrl = page.url();
-        this.maybePersistBoundChatUrl(this.lastMessengerUrl, 'scan-scroll');
-        return;
-      }
-
-      const scrolled = await page.evaluate(() => {
-        const root =
-          (document.querySelector('aside') as HTMLElement | null) ||
-          (document.querySelector('nav') as HTMLElement | null) ||
-          (document.querySelector('[role="navigation"]') as HTMLElement | null) ||
-          document.body;
-
-        const isScrollable = (el: HTMLElement) =>
-          el.scrollHeight > el.clientHeight && ['auto', 'scroll'].includes(getComputedStyle(el).overflowY);
-
-        const all = [root, ...Array.from(root.querySelectorAll<HTMLElement>('*'))];
-        const sc = all.find(isScrollable);
-
-        if (sc) {
-          sc.scrollTop += Math.floor(sc.clientHeight * 0.9);
-          return true;
+      if (!candidate) {
+        if (!this.supportChatDetected) {
+          this.bus.emit({
+            type: 'status',
+            level: 'warn',
+            message: 'Not bound. Open target chat and press Bind.',
+            at: new Date().toISOString(),
+          });
+        } else {
+          this.bus.emit({
+            type: 'status',
+            level: 'warn',
+            message: 'Waiting for target bind after support chat detection.',
+            at: new Date().toISOString(),
+          });
         }
+        await sleep(3000);
+        continue;
+      }
 
-        window.scrollBy(0, Math.floor(window.innerHeight * 0.8));
+      if (lastAttemptUrl !== candidate || !this.supportChatDetected) {
+        await this.openChatUrl(candidate);
+        lastAttemptUrl = candidate;
+      }
+      const ok = await this.verifyNotSupportChat();
+      if (ok) {
         return true;
-      });
+      }
 
-      if (!scrolled) break;
-      await sleep(650);
+      this.supportChatDetected = true;
+      await sleep(3000);
     }
 
-    await this.dumpDebugArtifacts('chat-not-found');
-    throw new Error(`Chat not found after scan+scroll: ${target}`);
+    return false;
   }
 
   isMessengerUrl(url: string | null): boolean {
@@ -613,7 +532,7 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
       const u = String(j?.url ?? '').trim();
       if (!u) return null;
       // keep it strict: only messenger chat URLs
-      if (!this.isMessengerUrl(u)) return null;
+      if (!this.isMessengerChannelUrl(u)) return null;
       return u;
     } catch {
       return null;
@@ -1014,6 +933,100 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
       .catch(() => undefined);
   }
 
+  private async resolveTargetChatUrl(direct: string): Promise<string | null> {
+    if (direct) {
+      const url = direct.startsWith('http') ? direct : `https://www.avito.ru${direct}`;
+      return url;
+    }
+
+    const bound = this.readBoundChatUrl();
+    if (bound) return bound;
+
+    return null;
+  }
+
+  private async openChatUrl(url: string) {
+    const page = this.mustPage();
+    this.supportChatDetected = false;
+    this.bus.emit({
+      type: 'status',
+      level: 'info',
+      message: `Opening chat URL: ${url}`,
+      at: new Date().toISOString(),
+    });
+
+    await page.goto(url, { waitUntil: 'domcontentloaded' });
+    await sleep(1200);
+    await this.waitForChatLikelyOpened();
+    this.lastMessengerUrl = page.url();
+    this.maybePersistBoundChatUrl(this.lastMessengerUrl, 'target-chat-url');
+  }
+
+  private async verifyNotSupportChat(): Promise<boolean> {
+    const page = this.mustPage();
+    const url = page.url();
+    const title = await this.getChatTitle();
+    const normalized = title.toLowerCase();
+    const supportHits = ['поддержка', 'служба поддержки', 'avito', 'авито'];
+    const supportDetected = supportHits.some((word) => normalized.includes(word));
+
+    if (!title) {
+      this.bus.emit({
+        type: 'status',
+        level: 'warn',
+        message: `Chat title not found for URL: ${url}`,
+        at: new Date().toISOString(),
+      });
+      return true;
+    }
+
+    this.bus.emit({
+      type: 'status',
+      level: 'info',
+      message: `Chat title detected: "${title}" (url: ${url})`,
+      at: new Date().toISOString(),
+    });
+
+    if (supportDetected) {
+      this.bus.emit({
+        type: 'status',
+        level: 'warn',
+        message: 'Support chat detected. Open target chat and Bind.',
+        at: new Date().toISOString(),
+      });
+      return false;
+    }
+
+    return true;
+  }
+
+  private async getChatTitle(): Promise<string> {
+    const page = this.mustPage();
+    const title = await page.evaluate(() => {
+      const norm = (s: string) => (s || '').replace(/\s+/g, ' ').trim();
+      const selectors = [
+        'header h1',
+        'header h2',
+        'main header h1',
+        'main header h2',
+        '[data-marker*="chat-title"]',
+        '[class*="title"]',
+        '[class*="header"] h1',
+        '[class*="header"] h2',
+      ];
+
+      for (const sel of selectors) {
+        const el = document.querySelector(sel) as HTMLElement | null;
+        if (!el) continue;
+        const text = norm(el.innerText || el.textContent || '');
+        if (text) return text;
+      }
+      return '';
+    });
+
+    return String(title || '').trim();
+  }
+
   private async tryFillLoginForm(login: string, password: string): Promise<boolean> {
     const page = this.mustPage();
 
@@ -1082,6 +1095,16 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
 
   private async watchLoop() {
     const page = this.mustPage();
+
+    if (this.supportChatDetected) {
+      this.bus.emit({
+        type: 'status',
+        level: 'warn',
+        message: 'Watcher paused: support chat detected. Open target chat and Bind.',
+        at: new Date().toISOString(),
+      });
+      return;
+    }
 
     this.bus.emit({
       type: 'status',
@@ -1187,7 +1210,10 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
           'профиль',
           'настройки',
           'помощь',
+          'перейти в помощь',
           'поддержка',
+          'поддержка авито',
+          'служба поддержки',
           'партнерская программа',
           'услуги',
           'доставка',
@@ -1196,6 +1222,7 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
 
         if (exactNoise.has(t)) return true;
         if (/^сегодня$|^вчера$/.test(t)) return true;
+        if (/^(понедельник|вторник|среда|четверг|пятница|суббота|воскресенье)$/.test(t)) return true;
 
         const dateRe =
           /^(понедельник|вторник|среда|четверг|пятница|суббота|воскресенье),?\s+\d{1,2}\s+(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)$/i;
@@ -1219,36 +1246,25 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
           return text.length > 0 && text.length < 4000 && !isUiNoise(text);
         }).length;
 
-      const pickContainer = (): HTMLElement | null => {
-        const candidates: HTMLElement[] = [];
+      const findMessageContainer = (): HTMLElement | null => {
+        const containers: Map<HTMLElement, number> = new Map();
+        const nodes = Array.from(document.querySelectorAll<HTMLElement>(messageSelectors)).filter(
+          (node) => !isInsideNav(node),
+        );
 
-        const roleLog = document.querySelector('[role="log"]') as HTMLElement | null;
-        if (roleLog) candidates.push(roleLog);
-
-        const dataMarker = document.querySelector('[data-marker*="messages/chat"]') as HTMLElement | null;
-        if (dataMarker) candidates.push(dataMarker);
-
-        const input = document.querySelector('textarea, [contenteditable="true"]') as HTMLElement | null;
-        if (input) {
-          const nearMain = input.closest('main') as HTMLElement | null;
-          if (nearMain) candidates.push(nearMain);
-
-          let cur: HTMLElement | null = input;
+        for (const node of nodes) {
+          let cur: HTMLElement | null = node;
           for (let i = 0; i < 6 && cur; i++) {
-            if (cur !== input) candidates.push(cur);
+            if (!cur || cur.tagName === 'BODY' || cur.tagName === 'HTML' || cur.tagName === 'MAIN') break;
+            if (!isInsideNav(cur)) {
+              containers.set(cur, (containers.get(cur) ?? 0) + 1);
+            }
             cur = cur.parentElement;
           }
         }
 
-        const main = document.querySelector('main') as HTMLElement | null;
-        if (main) candidates.push(main);
-
-        const unique = Array.from(new Set(candidates)).filter((el) => !isInsideNav(el));
-        if (unique.length === 0) return null;
-
         let best: { el: HTMLElement; count: number } | null = null;
-        for (const el of unique) {
-          const count = countMessages(el);
+        for (const [el, count] of containers.entries()) {
           if (!best || count > best.count) best = { el, count };
         }
 
@@ -1256,7 +1272,7 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
         return best.el;
       };
 
-      const container = pickContainer();
+      const container = findMessageContainer();
       if (!container) return false;
 
       // чтобы не спамить одним и тем же
@@ -1354,7 +1370,10 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
           'профиль',
           'настройки',
           'помощь',
+          'перейти в помощь',
           'поддержка',
+          'поддержка авито',
+          'служба поддержки',
           'партнерская программа',
           'услуги',
           'доставка',
@@ -1363,6 +1382,7 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
 
         if (exactNoise.has(t)) return true;
         if (/^сегодня$|^вчера$/.test(t)) return true;
+        if (/^(понедельник|вторник|среда|четверг|пятница|суббота|воскресенье)$/.test(t)) return true;
 
         const dateRe =
           /^(понедельник|вторник|среда|четверг|пятница|суббота|воскресенье),?\s+\d{1,2}\s+(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)$/i;
@@ -1386,36 +1406,25 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
           return text.length > 0 && text.length < 4000 && !isUiNoise(text);
         }).length;
 
-      const pickContainer = (): HTMLElement | null => {
-        const candidates: HTMLElement[] = [];
+      const findMessageContainer = (): HTMLElement | null => {
+        const containers: Map<HTMLElement, number> = new Map();
+        const nodes = Array.from(document.querySelectorAll<HTMLElement>(messageSelectors)).filter(
+          (node) => !isInsideNav(node),
+        );
 
-        const roleLog = document.querySelector('[role="log"]') as HTMLElement | null;
-        if (roleLog) candidates.push(roleLog);
-
-        const dataMarker = document.querySelector('[data-marker*="messages/chat"]') as HTMLElement | null;
-        if (dataMarker) candidates.push(dataMarker);
-
-        const input = document.querySelector('textarea, [contenteditable="true"]') as HTMLElement | null;
-        if (input) {
-          const nearMain = input.closest('main') as HTMLElement | null;
-          if (nearMain) candidates.push(nearMain);
-
-          let cur: HTMLElement | null = input;
+        for (const node of nodes) {
+          let cur: HTMLElement | null = node;
           for (let i = 0; i < 6 && cur; i++) {
-            if (cur !== input) candidates.push(cur);
+            if (!cur || cur.tagName === 'BODY' || cur.tagName === 'HTML' || cur.tagName === 'MAIN') break;
+            if (!isInsideNav(cur)) {
+              containers.set(cur, (containers.get(cur) ?? 0) + 1);
+            }
             cur = cur.parentElement;
           }
         }
 
-        const main = document.querySelector('main') as HTMLElement | null;
-        if (main) candidates.push(main);
-
-        const unique = Array.from(new Set(candidates)).filter((el) => !isInsideNav(el));
-        if (unique.length === 0) return null;
-
         let best: { el: HTMLElement; count: number } | null = null;
-        for (const el of unique) {
-          const count = countMessages(el);
+        for (const [el, count] of containers.entries()) {
           if (!best || count > best.count) best = { el, count };
         }
 
@@ -1423,7 +1432,7 @@ export class AvitoWatcherService implements OnModuleInit, OnModuleDestroy {
         return best.el;
       };
 
-      const container = pickContainer();
+      const container = findMessageContainer();
       if (!container) return '';
 
       const candidates = Array.from(container.querySelectorAll<HTMLElement>(messageSelectors));

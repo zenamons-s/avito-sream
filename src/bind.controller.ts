@@ -16,7 +16,7 @@ type BindResult = {
 };
 
 const messengerUrlRe = /avito\.ru\/(profile\/)?messenger(\/|\?|$)/i;
-const messengerChannelUrlRe = /avito\.ru\/(profile\/)?messenger\/channel\//i;
+const messengerChannelUrlRe = /avito\.ru\/profile\/messenger\/channel\//i;
 const messengerChannelPathRe = /\/profile\/messenger\/channel\//i;
 const messengerSearchRe = /\/profile\/messenger(\/|\?|$)/i;
 const messengerSearchQueryRe = /[?&]q=/i;

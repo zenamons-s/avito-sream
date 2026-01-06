@@ -12,6 +12,9 @@
     .meta { font-size: 12px; opacity: .75; margin-bottom: 6px; }
     .text { white-space: pre-wrap; }
     .pill { display:inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; background:#eee; margin-left: 8px;}
+    #bindState { display: flex; flex-direction: column; gap: 4px; }
+    #bindState a { color: #0a58ca; text-decoration: none; }
+    #bindState a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -19,11 +22,11 @@
   <div id="status">connecting…</div>
   <div id="tunnel" class="pill" style="margin-top:8px;">Public URL: —</div>
 
-  <div style="margin: 10px 0; display:flex; gap: 8px; flex-wrap: wrap;">
+  <div style="margin: 10px 0; display:flex; gap: 8px; flex-wrap: wrap; align-items: center;">
     <button id="bindBtn">Bind current chat</button>
     <button id="clearBtn">Clear bind</button>
-    <span id="bindState" class="pill">bind: unknown</span>
   </div>
+  <div id="bindState" class="pill">bind: unknown</div>
   <div id="log"></div>
 
 <script>
@@ -35,20 +38,59 @@
   const bindStateEl = document.getElementById('bindState');
   const tunnelEl = document.getElementById('tunnel');
 
+  function setBindStatusLines(lines) {
+    bindStateEl.innerHTML = '';
+    for (const line of lines) {
+      const div = document.createElement('div');
+      if (line instanceof Node) {
+        div.appendChild(line);
+      } else {
+        div.textContent = line;
+      }
+      bindStateEl.appendChild(div);
+    }
+  }
+
+  function buildLink(url) {
+    const link = document.createElement('a');
+    link.href = url;
+    link.target = '_blank';
+    link.rel = 'noreferrer';
+    link.textContent = url;
+    return link;
+  }
+
   async function refreshBindStatus() {
     try {
       const r = await fetch('/bind/status');
       const j = await r.json();
-      if (j?.bound || j?.ok) {
-        bindStateEl.textContent = 'bind: ✅';
-        const at = j.boundAt ? ` (${j.boundAt})` : '';
-        bindStateEl.title = (j.url || '') + at;
-      } else {
-        bindStateEl.textContent = 'bind: ✖';
-        bindStateEl.title = '';
+      if (j?.ok && j?.kind === 'channel' && j?.url) {
+        const line = document.createElement('span');
+        line.append('✅ Bound to channel: ');
+        line.appendChild(buildLink(j.url));
+        setBindStatusLines([line]);
+        return;
       }
+
+      if (j?.kind === 'none') {
+        setBindStatusLines(['⚠ Not bound']);
+        return;
+      }
+
+      const lines = ['⚠ Bound but not a channel'];
+      if (j?.message) lines.push(j.message);
+      if (j?.url) {
+        const line = document.createElement('span');
+        line.append('URL: ');
+        line.appendChild(buildLink(j.url));
+        lines.push(line);
+      }
+      if (j?.kind === 'search') {
+        lines.push('Это поиск. Открой диалог (URL должен содержать /channel/) и нажми Bind.');
+      }
+      setBindStatusLines(lines);
     } catch {
-      bindStateEl.textContent = 'bind: error';
+      setBindStatusLines(['bind: error']);
     }
   }
 
@@ -94,12 +136,12 @@
       if (j?.ok) {
         const parts = [];
         if (j?.message) parts.push(j.message);
-        if (j?.warning) parts.push(`warning: ${j.warning}`);
         if (parts.length === 0) parts.push('Bound current chat ✅');
         if (j?.url) parts.push(j.url);
         addBlock(new Date().toISOString() + ' | bind', parts.join('\n'));
       } else {
         const parts = [`Bind failed: ${j?.message || 'unknown'}`];
+        if (j?.kind) parts.push(`kind: ${j.kind}`);
         if (j?.url) parts.push(j.url);
         addBlock(new Date().toISOString() + ' | bind', parts.join('\n'));
       }

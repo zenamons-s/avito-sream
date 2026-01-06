@@ -6,8 +6,20 @@ import { EventBus } from './event-bus';
 
 type BindState = { url: string; boundAt: string };
 
+type BindKind = 'channel' | 'search' | 'messenger' | 'other' | 'none';
+
+type BindResult = {
+  ok: boolean;
+  kind: BindKind;
+  url?: string;
+  message?: string;
+};
+
 const messengerUrlRe = /avito\.ru\/(profile\/)?messenger(\/|\?|$)/i;
 const messengerChannelUrlRe = /avito\.ru\/(profile\/)?messenger\/channel\//i;
+const messengerChannelPathRe = /\/profile\/messenger\/channel\//i;
+const messengerSearchRe = /\/profile\/messenger(\/|\?|$)/i;
+const messengerSearchQueryRe = /[?&]q=/i;
 
 @Controller('bind')
 export class BindController {
@@ -19,15 +31,27 @@ export class BindController {
   ) {}
 
   @Get('status')
-  status() {
+  status(): BindResult {
     const state = this.read();
-    if (!state?.url || !messengerUrlRe.test(state.url)) {
+    if (!state?.url) {
       this.emitStatus('warn', 'Bind status: not bound');
-      return { ok: false };
+      return { ok: false, kind: 'none' };
     }
 
-    this.emitStatus('info', `Bind status: ${state.url}`);
-    return { ok: true, url: state.url };
+    const normalizedUrl = this.normalizeUrl(state.url);
+    const classification = this.classifyUrl(normalizedUrl);
+    if (classification.kind !== 'channel') {
+      this.emitStatus('warn', `Bind status: invalid url (${classification.kind})`);
+      return {
+        ok: false,
+        kind: classification.kind,
+        url: normalizedUrl,
+        message: 'Bound URL is not channel',
+      };
+    }
+
+    this.emitStatus('info', `Bind status: ${normalizedUrl}`);
+    return { ok: true, kind: 'channel', url: normalizedUrl };
   }
 
   /**
@@ -35,44 +59,46 @@ export class BindController {
    * Use flow: run with HEADLESS=false, login, open the desired chat manually, then POST /bind/current.
    */
   @Post('current')
-  async bindCurrent() {
-    const initialUrl = ((await this.watcher.getBestBindableUrl()) ?? '').trim();
+  async bindCurrent(): Promise<BindResult & { debugUrls?: string[] }> {
+    const initialUrl = (this.watcher.getCurrentUrl() ?? '').trim();
+    let candidateUrl = initialUrl;
+
+    if (!this.isChannelUrl(candidateUrl)) {
+      const messengerTabUrl = await this.watcher.getMessengerTabUrl();
+      if (messengerTabUrl) {
+        candidateUrl = messengerTabUrl.trim();
+      }
+    }
+
     const debugUrls = await this.watcher.debugListPages();
     this.emitStatus('info', `Bind debug pages: ${debugUrls.join(' | ')}`);
-    if (!initialUrl) {
+
+    if (!candidateUrl) {
       const message = 'No active Puppeteer page URL (is browser running?)';
       this.emitStatus('warn', message);
-      return { ok: false, message, debugUrls };
+      return { ok: false, kind: 'other', message, debugUrls };
     }
 
-    if (!messengerUrlRe.test(initialUrl)) {
-      const message = `Current URL does not look like Avito messenger: ${initialUrl}`;
-      this.emitStatus('warn', message);
-      return { ok: false, message, url: initialUrl, debugUrls };
+    const normalizedUrl = this.normalizeUrl(candidateUrl);
+    const classification = this.classifyUrl(normalizedUrl);
+    if (classification.kind !== 'channel') {
+      const message = 'Not a channel URL. Open a chat and try again.';
+      this.emitStatus('warn', `${message} (${classification.kind}): ${normalizedUrl}`);
+      return {
+        ok: false,
+        kind: classification.kind,
+        message,
+        url: normalizedUrl,
+        debugUrls,
+      };
     }
 
-    let finalUrl = initialUrl;
-    let warning: string | undefined;
-    if (!messengerChannelUrlRe.test(initialUrl)) {
-      const ensured = await this.watcher.ensureChannelUrl();
-      if (ensured?.url) {
-        finalUrl = ensured.url;
-      }
-      if (!ensured?.channel) {
-        warning = 'Bound messenger search page, not channel';
-      }
-    }
-
-    const state: BindState = { url: finalUrl, boundAt: new Date().toISOString() };
+    const state: BindState = { url: normalizedUrl, boundAt: new Date().toISOString() };
     fs.writeFileSync(this.bindFilePath, JSON.stringify(state, null, 2), 'utf-8');
 
-    const okMessage = `Target chat bound: ${finalUrl}`;
-    if (warning) {
-      this.emitStatus('warn', `${okMessage}. ${warning}`);
-    } else {
-      this.emitStatus('info', okMessage);
-    }
-    return warning ? { ok: true, url: finalUrl, warning } : { ok: true, url: finalUrl };
+    const okMessage = `Target chat bound: ${normalizedUrl}`;
+    this.emitStatus('info', okMessage);
+    return { ok: true, kind: 'channel', url: normalizedUrl };
   }
 
   @Post('clear')
@@ -102,6 +128,33 @@ export class BindController {
     } catch {
       return null;
     }
+  }
+
+  private normalizeUrl(raw: string): string {
+    const trimmed = raw.trim();
+    if (!trimmed) return trimmed;
+    if (trimmed.startsWith('/')) {
+      return `https://www.avito.ru${trimmed}`;
+    }
+    return trimmed;
+  }
+
+  private isChannelUrl(url: string): boolean {
+    return messengerChannelUrlRe.test(url) || messengerChannelPathRe.test(url);
+  }
+
+  private classifyUrl(url: string): { kind: BindKind } {
+    if (this.isChannelUrl(url)) {
+      return { kind: 'channel' };
+    }
+    const isMessenger = messengerUrlRe.test(url) || messengerSearchRe.test(url);
+    if (isMessenger) {
+      if (messengerSearchQueryRe.test(url)) {
+        return { kind: 'search' };
+      }
+      return { kind: 'messenger' };
+    }
+    return { kind: 'other' };
   }
 
   private emitStatus(level: 'info' | 'warn' | 'error', message: string) {
